@@ -15,6 +15,8 @@
 
 # next.js
 /.next/
+/.next-build/
+/.next-build-*/
 /out/
 
 # production
@@ -29,6 +31,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+next-dev*.log
+dev-server*.log
+
+# local runtime/demo artifacts
+/data/*.json
+/data/**/*.jsonl
+/artifacts-*.png
 
 # env files (can opt-in for committing if needed)
 .env*
