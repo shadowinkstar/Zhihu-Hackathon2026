@@ -77,6 +77,62 @@ stop_existing_server() {
   rm -f "$PID_FILE"
 }
 
+process_command_line() {
+  local pid="$1"
+  tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true
+}
+
+stop_port_listeners() {
+  local pids=""
+
+  if command -v lsof >/dev/null 2>&1; then
+    pids="$(lsof -ti TCP:"$APP_PORT" -sTCP:LISTEN 2>/dev/null || true)"
+  elif command -v fuser >/dev/null 2>&1; then
+    pids="$(fuser -n tcp "$APP_PORT" 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$pids" ]]; then
+    return
+  fi
+
+  for pid in $pids; do
+    if ! current_pid_alive "$pid"; then
+      continue
+    fi
+
+    local command_line
+    command_line="$(process_command_line "$pid")"
+    if [[ "$command_line" != *"$APP_DIR"* && "$command_line" != *"next"* && "$command_line" != *"node"* && "$command_line" != *"npm"* ]]; then
+      fail "Port $APP_PORT is already used by another process ($pid): $command_line"
+    fi
+
+    log "Stopping process listening on port $APP_PORT: $pid"
+    kill "$pid" >/dev/null 2>&1 || true
+  done
+
+  for _ in {1..20}; do
+    local still_alive=""
+    for pid in $pids; do
+      if current_pid_alive "$pid"; then
+        still_alive="$still_alive $pid"
+      fi
+    done
+
+    if [[ -z "$still_alive" ]]; then
+      return
+    fi
+
+    sleep 0.5
+  done
+
+  for pid in $pids; do
+    if current_pid_alive "$pid"; then
+      log "Process still listening after graceful stop; forcing: $pid"
+      kill -9 "$pid" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
 pull_latest_code() {
   log "Fetching latest git refs"
   git fetch origin "$DEPLOY_BRANCH"
@@ -167,8 +223,9 @@ main() {
   log "Deploying $APP_NAME from $APP_DIR"
   pull_latest_code
   install_dependencies
-  build_app
   stop_existing_server
+  stop_port_listeners
+  build_app
   start_server
   wait_until_ready
 }
