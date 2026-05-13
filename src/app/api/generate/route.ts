@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { redeemInvite } from "@/lib/server/invite-store";
+import { NextRequest, NextResponse } from "next/server";
+import { requireUser } from "@/lib/server/auth";
 import type { GenerateRequest } from "@/lib/types";
 import {
   buildGeneratePromptLog,
@@ -22,6 +22,7 @@ import {
   safeError,
   textSummary,
 } from "@/lib/server/call-logger";
+import { saveGenerationRecord } from "@/lib/server/user-store";
 
 export const runtime = "nodejs";
 
@@ -127,9 +128,14 @@ async function callAnthropicCompatible(payload: GenerateRequest, endpoint: strin
   } satisfies ModelCallResult;
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   const startedAt = new Date();
   const callId = newCallId("generate");
+  const session = await requireUser(request);
+  if (!session) {
+    return NextResponse.json({ error: "请先使用知乎登录后再调用模型" }, { status: 401 });
+  }
+
   const parsed = generateSchema.safeParse(await request.json());
 
   if (!parsed.success) {
@@ -219,6 +225,12 @@ export async function POST(request: Request) {
         payload.access.model,
         generationMode,
       );
+      await saveGenerationRecord(session.user.id, result, {
+        sourceTitle: payload.analysis.source.title,
+        selectedArc: payload.selectedArc,
+        styleLabel: payload.styleProfile?.label,
+        mode: generationMode,
+      });
       const endedAt = new Date();
 
       await logCallEvent({
@@ -240,23 +252,8 @@ export async function POST(request: Request) {
       return NextResponse.json(result);
     }
 
-    const invite = await redeemInvite(payload.access.inviteCode, true);
-    if (!invite.ok) {
-      await logCallEvent({
-        callId,
-        event: "generate.invite_rejected",
-        route: "/api/generate",
-        ok: false,
-        startedAt: startedAt.toISOString(),
-        endedAt: new Date().toISOString(),
-        durationMs: Date.now() - startedAt.getTime(),
-        promptVersion: PROMPT_VERSION,
-        request: requestLog,
-        error: {
-          reason: invite.reason,
-        },
-      });
-      return NextResponse.json({ error: invite.reason }, { status: 403 });
+    if (payload.access.mode !== "internal") {
+      return NextResponse.json({ error: "内置模型需要知乎登录" }, { status: 400 });
     }
 
     const internalEndpoint = process.env.INTERNAL_MODEL_ENDPOINT;
@@ -309,10 +306,16 @@ export async function POST(request: Request) {
             payload,
             continuation,
             "internal-model",
-            invite.remaining,
+            undefined,
             anthropicModel,
             generationMode,
           );
+          await saveGenerationRecord(session.user.id, result, {
+            sourceTitle: payload.analysis.source.title,
+            selectedArc: payload.selectedArc,
+            styleLabel: payload.styleProfile?.label,
+            mode: generationMode,
+          });
           const endedAt = new Date();
           await logCallEvent({
             callId,
@@ -328,9 +331,6 @@ export async function POST(request: Request) {
             request: requestLog,
             prompts: promptLog,
             response: result,
-            meta: {
-              inviteRemaining: invite.remaining,
-            },
           });
           return NextResponse.json(result);
         }
@@ -368,10 +368,16 @@ export async function POST(request: Request) {
         payload,
         continuation || mockContinuation(payload),
         "internal-model",
-        invite.remaining,
+        undefined,
         internalModel,
         generationMode,
       );
+      await saveGenerationRecord(session.user.id, result, {
+        sourceTitle: payload.analysis.source.title,
+        selectedArc: payload.selectedArc,
+        styleLabel: payload.styleProfile?.label,
+        mode: generationMode,
+      });
       const endedAt = new Date();
       await logCallEvent({
         callId,
@@ -406,15 +412,18 @@ export async function POST(request: Request) {
         request: requestLog,
         prompts: promptLog,
         response: result,
-        meta: {
-          inviteRemaining: invite.remaining,
-        },
       });
       return NextResponse.json(result);
     }
 
     const mock = mockContinuation(payload);
-    const result = buildContinuationResult(payload, mock, "demo-invite", invite.remaining, undefined, generationMode);
+    const result = buildContinuationResult(payload, mock, "demo-local", undefined, undefined, generationMode);
+    await saveGenerationRecord(session.user.id, result, {
+      sourceTitle: payload.analysis.source.title,
+      selectedArc: payload.selectedArc,
+      styleLabel: payload.styleProfile?.label,
+      mode: generationMode,
+    });
     const endedAt = new Date();
     await logCallEvent({
       callId,
@@ -425,14 +434,11 @@ export async function POST(request: Request) {
       endedAt: endedAt.toISOString(),
       durationMs: endedAt.getTime() - startedAt.getTime(),
       promptVersion: PROMPT_VERSION,
-      provider: "demo-invite",
+      provider: "demo-local",
       model: "mock",
       request: requestLog,
       prompts: promptLog,
       response: result,
-      meta: {
-        inviteRemaining: invite.remaining,
-      },
     });
 
     return NextResponse.json(result);

@@ -1,11 +1,13 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import type { NarrativeAnalysis, StyleProfile } from "@/lib/types";
+import { requireUser } from "@/lib/server/auth";
 import {
   getClaudeCodeDaemon,
   shouldTryClaudeCode,
 } from "@/lib/server/claude-code-daemon";
 import { safeError } from "@/lib/server/call-logger";
+import { saveUserStyle } from "@/lib/server/user-store";
 
 export const runtime = "nodejs";
 
@@ -197,7 +199,12 @@ function buildAnalysis(
   };
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const session = await requireUser(request);
+  if (!session) {
+    return NextResponse.json({ error: "请先使用知乎登录后再生成个人文风" }, { status: 401 });
+  }
+
   const parsed = requestSchema.safeParse(await request.json());
 
   if (!parsed.success) {
@@ -258,6 +265,7 @@ export async function POST(request: Request) {
         writeLog("解析文风 Skill", "正在校验 Claude Code 返回的结构化结果。", "running");
         const refined = extractJson(result.text);
         const analysis = buildAnalysis(input, refined, result.model);
+        await saveUserStyle(session.user.id, analysis.styleProfile);
         writeLog(
           "生成文风 Skill",
           `${analysis.styleProfile.label} · ${analysis.styleSkill.rhythm.length} 条节奏规则。`,

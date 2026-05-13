@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { redeemInvite } from "@/lib/server/invite-store";
+import { NextRequest, NextResponse } from "next/server";
+import { requireUser } from "@/lib/server/auth";
 import {
   buildGeneratePromptLog,
   buildGenerateRequestLog,
@@ -22,6 +22,7 @@ import {
   safeError,
   textSummary,
 } from "@/lib/server/call-logger";
+import { saveGenerationRecord } from "@/lib/server/user-store";
 
 export const runtime = "nodejs";
 
@@ -79,9 +80,14 @@ export async function GET() {
   }
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   const startedAt = new Date();
   const callId = newCallId("generate_stream");
+  const session = await requireUser(request);
+  if (!session) {
+    return NextResponse.json({ error: "请先使用知乎登录后再调用内置 Kimi 模型" }, { status: 401 });
+  }
+
   const parsed = generateSchema.safeParse(await request.json());
 
   if (!parsed.success) {
@@ -110,31 +116,12 @@ export async function POST(request: Request) {
   const requestLog = buildGenerateRequestLog(payload, generationMode);
   const promptLog = buildGeneratePromptLog(payload, promptMessages);
 
-  if (payload.access.mode !== "invite") {
-    return NextResponse.json({ error: "流式生成只支持邀请码模式" }, { status: 400 });
-  }
-
-  const invite = await redeemInvite(payload.access.inviteCode, true);
-  if (!invite.ok) {
-    await logCallEvent({
-      callId,
-      event: "generate_stream.invite_rejected",
-      route: "/api/generate/stream",
-      ok: false,
-      startedAt: startedAt.toISOString(),
-      endedAt: new Date().toISOString(),
-      durationMs: Date.now() - startedAt.getTime(),
-      promptVersion: PROMPT_VERSION,
-      request: requestLog,
-      error: {
-        reason: invite.reason,
-      },
-    });
-    return NextResponse.json({ error: invite.reason }, { status: 403 });
+  if (payload.access.mode !== "internal") {
+    return NextResponse.json({ error: "流式生成只支持登录后的内置 Kimi 模型" }, { status: 400 });
   }
 
   const encoder = new TextEncoder();
-  const preferredProvider = shouldTryClaudeCode() ? "claude-code" : "demo-invite";
+  const preferredProvider = shouldTryClaudeCode() ? "claude-code" : "demo-local";
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -195,11 +182,17 @@ export async function POST(request: Request) {
         const result = buildContinuationResult(
           payload,
           mock,
-          "demo-invite",
-          invite.remaining,
+          "demo-local",
+          undefined,
           undefined,
           generationMode,
         );
+        await saveGenerationRecord(session.user.id, result, {
+          sourceTitle: payload.analysis.source.title,
+          selectedArc: payload.selectedArc,
+          styleLabel: payload.styleProfile?.label,
+          mode: generationMode,
+        });
         const endedAt = new Date();
         await logCallEvent({
           callId,
@@ -210,13 +203,12 @@ export async function POST(request: Request) {
           endedAt: endedAt.toISOString(),
           durationMs: endedAt.getTime() - startedAt.getTime(),
           promptVersion: PROMPT_VERSION,
-          provider: "demo-invite",
+          provider: "demo-local",
           model: "mock",
           request: requestLog,
           prompts: promptLog,
           response: result,
           meta: {
-            inviteRemaining: invite.remaining,
             fallbackFrom,
           },
         });
@@ -257,10 +249,16 @@ export async function POST(request: Request) {
           payload,
           claudeResult.text,
           "claude-code",
-          invite.remaining,
+          undefined,
           claudeResult.model,
           generationMode,
         );
+        await saveGenerationRecord(session.user.id, result, {
+          sourceTitle: payload.analysis.source.title,
+          selectedArc: payload.selectedArc,
+          styleLabel: payload.styleProfile?.label,
+          mode: generationMode,
+        });
         const endedAt = new Date();
 
         await logCallEvent({
@@ -302,7 +300,6 @@ export async function POST(request: Request) {
           prompts: promptLog,
           response: result,
           meta: {
-            inviteRemaining: invite.remaining,
             mode: claudeResult.mode,
             thinkingEnabled,
             timings: claudeResult.timings,
@@ -334,7 +331,7 @@ export async function POST(request: Request) {
           prompts: promptLog,
           error: safeError(error),
           meta: {
-            fallback: streamedText ? "closed-partial-stream" : "demo-invite",
+            fallback: streamedText ? "closed-partial-stream" : "demo-local",
             mode: generationMode,
           },
         });
@@ -358,7 +355,6 @@ export async function POST(request: Request) {
       "x-accel-buffering": "no",
       "x-generation-mode": generationMode,
       "x-provider": preferredProvider,
-      "x-quota-remaining": String(invite.remaining),
     },
   });
 }

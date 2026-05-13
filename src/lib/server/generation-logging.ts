@@ -1,5 +1,5 @@
 import type { GenerateRequest, GenerationMode } from "@/lib/types";
-import { privateTextSummary, PROMPT_VERSION, textSummary } from "@/lib/server/call-logger";
+import { privateTextSummary, PROMPT_VERSION } from "@/lib/server/call-logger";
 
 type PromptMessage = {
   content: string;
@@ -22,10 +22,9 @@ export function buildGenerateRequestLog(payload: GenerateRequest, generationMode
         }
       : null,
     access:
-      payload.access.mode === "invite"
+      payload.access.mode === "internal"
         ? {
-            mode: "invite",
-            inviteCodeHash: textSummary(payload.access.inviteCode).hash,
+            mode: "internal",
           }
         : {
             mode: "custom",

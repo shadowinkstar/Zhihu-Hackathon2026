@@ -1,4 +1,4 @@
-export type ModelAccessMode = "invite" | "custom";
+export type ModelAccessMode = "internal" | "custom";
 
 export type GenerationMode = "quick" | "expert";
 
@@ -10,6 +10,13 @@ export type StyleProfile = {
   source: "preset" | "analysis" | "neutral";
   provenance?: string;
   dimensions?: string[];
+};
+
+export type ZhihuUser = {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+  urlToken?: string;
 };
 
 export type CorpusSample = {
@@ -81,8 +88,7 @@ export type GenerateRequest = {
   styleIntensity: number;
   access:
     | {
-        mode: "invite";
-        inviteCode: string;
+        mode: "internal";
       }
     | {
         mode: "custom";
@@ -99,9 +105,22 @@ export type ContinuationResult = {
   continuation: string;
   editorNotes: string[];
   usage: {
-    provider: "demo-invite" | "custom-openai-compatible" | "internal-model" | "claude-code";
+    provider: "demo-local" | "custom-openai-compatible" | "internal-model" | "claude-code";
     mode?: GenerationMode;
     model?: string;
     quotaRemaining?: number;
   };
+};
+
+export type GenerationRecord = {
+  id: string;
+  createdAt: string;
+  title: string;
+  continuation: string;
+  sourceTitle?: string;
+  selectedArc?: string;
+  styleLabel?: string;
+  mode?: GenerationMode;
+  provider?: ContinuationResult["usage"]["provider"];
+  model?: string;
 };

@@ -24,8 +24,7 @@ export const generateSchema: z.ZodType<GenerateRequest> = z.object({
   styleIntensity: z.number().min(0).max(100),
   access: z.discriminatedUnion("mode", [
     z.object({
-      mode: z.literal("invite"),
-      inviteCode: z.string().min(1),
+      mode: z.literal("internal"),
     }),
     z.object({
       mode: z.literal("custom"),

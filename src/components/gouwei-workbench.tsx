@@ -9,9 +9,9 @@ import {
   DownloadCloud,
   ExternalLink,
   FileText,
-  KeyRound,
   Link2,
   Loader2,
+  LogOut,
   MessagesSquare,
   PenLine,
   Plus,
@@ -21,6 +21,7 @@ import {
   Sparkles,
   Square,
   Trash2,
+  UserRound,
   Wand2,
 } from "lucide-react";
 import {
@@ -35,8 +36,10 @@ import {
 import type {
   ContinuationResult,
   GenerationMode,
+  GenerationRecord,
   NarrativeAnalysis,
   StyleProfile,
+  ZhihuUser,
 } from "@/lib/types";
 
 const cn = (...classes: Array<string | false | null | undefined>) =>
@@ -134,9 +137,10 @@ const lengthOptions = [
 ] as const;
 
 const styleIntensityForApiCompatibility = 64;
+const loginRequiredMessage = "请先使用知乎登录后试用内置 Kimi 模型。";
 
 const providerLabel = {
-  "demo-invite": "演示",
+  "demo-local": "演示",
   "custom-openai-compatible": "自带 API",
   "internal-model": "内置模型",
   "claude-code": "Claude Code",
@@ -184,6 +188,24 @@ type SkillCandidate = {
   url: string;
   summary: string;
   trustNote: string;
+};
+
+type MeResponse = {
+  user: ZhihuUser;
+  styles: StyleProfile[];
+  generations: GenerationRecord[];
+};
+
+type AuthConfigResponse = {
+  redirectUri: string;
+};
+
+type ZhihuAuthStartResponse = {
+  authorizeUrl: string;
+};
+
+type SessionClaimResponse = {
+  ok: boolean;
 };
 
 const styleMaterialModes: Array<{
@@ -278,18 +300,9 @@ async function readResponseError(response: Response) {
   }
 }
 
-function parseQuota(value: string | null) {
-  if (!value) {
-    return undefined;
-  }
-
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function providerFromHeader(value: string | null): ContinuationResult["usage"]["provider"] {
   if (
-    value === "demo-invite" ||
+    value === "demo-local" ||
     value === "custom-openai-compatible" ||
     value === "internal-model" ||
     value === "claude-code"
@@ -451,12 +464,10 @@ export function GouweiWorkbench() {
   const [generationMode, setGenerationMode] = useState<GenerationMode>("quick");
   const [thinkingEnabled, setThinkingEnabled] = useState(true);
   const [length, setLength] = useState<"short" | "medium" | "long">("medium");
-  const [accessMode, setAccessMode] = useState<"invite" | "custom">("invite");
-  const [inviteCode, setInviteCode] = useState("ZH-HACK-2026");
-  const [inviteStatus, setInviteStatus] = useState<string | null>(null);
-  const [endpoint, setEndpoint] = useState("https://api.openai.com/v1");
-  const [model, setModel] = useState("gpt-4.1-mini");
-  const [apiKey, setApiKey] = useState("");
+  const [currentUser, setCurrentUser] = useState<ZhihuUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [oauthRedirectUri, setOauthRedirectUri] = useState("/api/auth/zhihu/callback");
+  const [generationRecords, setGenerationRecords] = useState<GenerationRecord[]>([]);
   const [result, setResult] = useState<ContinuationResult | null>(null);
   const [lastClaudeRunConfig, setLastClaudeRunConfig] = useState<{
     mode: GenerationMode;
@@ -472,7 +483,7 @@ export function GouweiWorkbench() {
     | "skillImport"
     | "generate"
     | "continue"
-    | "invite"
+    | "auth"
     | null
   >(null);
   const [error, setError] = useState<string | null>(null);
@@ -521,6 +532,44 @@ export function GouweiWorkbench() {
   );
   const canDeleteStyle = styleOptions.length > minimumStyleCount;
 
+  async function refreshWorkspace() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const loginTicket = params.get("login_ticket");
+      if (loginTicket) {
+        await postJson<SessionClaimResponse>("/api/auth/session/claim", { ticket: loginTicket });
+        params.delete("login_ticket");
+        const query = params.toString();
+        window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+      }
+
+      const data = await getJson<MeResponse>("/api/me");
+      setCurrentUser(data.user);
+      setCustomStyleProfiles(data.styles);
+      setGenerationRecords(data.generations);
+      const authError = new URLSearchParams(window.location.search).get("auth_error");
+      setError(authError);
+      if (authError) {
+        window.history.replaceState(null, "", window.location.pathname);
+      }
+    } catch {
+      setCurrentUser(null);
+      setCustomStyleProfiles([]);
+      setGenerationRecords([]);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      void refreshWorkspace();
+      getJson<AuthConfigResponse>("/api/auth/zhihu/config")
+        .then((config) => setOauthRedirectUri(config.redirectUri))
+        .catch(() => setOauthRedirectUri("/api/auth/zhihu/callback"));
+    });
+  }, []);
+
   useEffect(() => {
     if (
       (busy !== "generate" && busy !== "continue" && busy !== "style") ||
@@ -540,7 +589,7 @@ export function GouweiWorkbench() {
   }, [busy, generationStartedAt]);
 
   useEffect(() => {
-    if (accessMode !== "invite") {
+    if (!currentUser) {
       return;
     }
 
@@ -553,7 +602,7 @@ export function GouweiWorkbench() {
     });
 
     return () => controller.abort();
-  }, [accessMode]);
+  }, [currentUser]);
 
   useEffect(() => {
     if (styleMaterialMode !== "skill" || skillCandidates.length) {
@@ -659,6 +708,9 @@ export function GouweiWorkbench() {
       ...current.filter((style) => style.id !== nextStyle.id),
     ]);
     setSelectedStyleId(nextStyle.id);
+    void postJson("/api/user/styles", nextStyle).catch(() => {
+      // The style-refine route also persists generated styles; this is a best-effort backup.
+    });
   }
 
   function deleteStyle(style: StyleProfile) {
@@ -668,6 +720,13 @@ export function GouweiWorkbench() {
 
     setCustomStyleProfiles((current) => current.filter((item) => item.id !== style.id));
     setManagedPresetStyles((current) => current.filter((item) => item.id !== style.id));
+    if (style.source === "analysis") {
+      void fetch(`/api/user/styles?id=${encodeURIComponent(style.id)}`, {
+        method: "DELETE",
+      }).catch(() => {
+        // Keep the UI responsive; the next refresh will reconcile persisted state.
+      });
+    }
 
     if (selectedStyleId === style.id) {
       const nextStyle = styleOptions.find((item) => item.id !== style.id) || neutralStyle;
@@ -777,6 +836,12 @@ export function GouweiWorkbench() {
   }
 
   async function refineAuthorStyle() {
+    if (!currentUser) {
+      setActiveTab("style");
+      setError("请先使用知乎登录后生成并保存个人文风。");
+      return;
+    }
+
     setBusy("style");
     setError(null);
     setWorkflowLogOpen(true);
@@ -860,6 +925,7 @@ export function GouweiWorkbench() {
       if (!nextAnalysis) {
         throw new Error("Claude Code 没有生成可用文风。");
       }
+      void refreshWorkspace();
     } catch (nextError) {
       const message = nextError instanceof Error ? nextError.message : "文风炼化失败";
       addWorkflowLog("文风炼化失败", message, "error");
@@ -882,21 +948,28 @@ export function GouweiWorkbench() {
     });
   }
 
-  async function checkInvite() {
-    setBusy("invite");
-    setError(null);
-    setInviteStatus(null);
-
+  async function logout() {
+    setBusy("auth");
     try {
-      const data = await postJson<{ remaining?: number; label?: string }>("/api/invite/redeem", {
-        code: inviteCode,
-        previewOnly: true,
-      });
-      setInviteStatus(`${data.label || "邀请码"}剩余 ${data.remaining ?? 0} 次`);
-    } catch (nextError) {
-      setInviteStatus(nextError instanceof Error ? nextError.message : "邀请码不可用");
+      await fetch("/api/auth/logout", { method: "POST" });
+      setCurrentUser(null);
+      setCustomStyleProfiles([]);
+      setGenerationRecords([]);
+      setResult(null);
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function startZhihuLogin() {
+    setBusy("auth");
+    setError(null);
+    try {
+      const data = await getJson<ZhihuAuthStartResponse>("/api/auth/zhihu/start");
+      window.location.assign(data.authorizeUrl);
+    } catch (nextError) {
+      setBusy(null);
+      setError(nextError instanceof Error ? nextError.message : "知乎登录启动失败");
     }
   }
 
@@ -939,6 +1012,12 @@ export function GouweiWorkbench() {
   }
 
   async function generateContinuation(event: MouseEvent<HTMLButtonElement>) {
+    if (!currentUser) {
+      setActiveTab("write");
+      setError(loginRequiredMessage);
+      return;
+    }
+
     const controller = new AbortController();
     generationAbortRef.current = controller;
     setBusy("generate");
@@ -966,13 +1045,10 @@ export function GouweiWorkbench() {
         thinkingEnabled,
         length,
         styleIntensity: styleIntensityForApiCompatibility,
-        access:
-          accessMode === "invite"
-            ? { mode: "invite", inviteCode }
-            : { mode: "custom", endpoint, apiKey, model },
+        access: { mode: "internal" },
       };
 
-      if (accessMode === "invite") {
+      {
         const response = await fetch("/api/generate/stream", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -984,7 +1060,6 @@ export function GouweiWorkbench() {
           throw new Error(await readResponseError(response));
         }
 
-        const quotaRemaining = parseQuota(response.headers.get("x-quota-remaining"));
         const provider = providerFromHeader(response.headers.get("x-provider"));
         if (provider === "claude-code") {
           setLastClaudeRunConfig({ mode: generationMode, thinkingEnabled, length });
@@ -997,15 +1072,11 @@ export function GouweiWorkbench() {
           editorNotes,
           usage: {
             provider,
-            quotaRemaining,
             model: provider === "claude-code" ? "Claude Code" : undefined,
             mode: generationMode,
           },
         };
         setResult(streamingResult);
-        if (typeof quotaRemaining === "number") {
-          setInviteStatus(`剩余 ${quotaRemaining} 次`);
-        }
 
         const reader = response.body?.getReader();
         if (!reader) {
@@ -1063,13 +1134,8 @@ export function GouweiWorkbench() {
         if (eventBuffer.trim()) {
           parseStreamBuffer(`${eventBuffer}\n\n`, handleStreamEvent);
         }
+        void refreshWorkspace();
         return;
-      }
-
-      const nextResult = await postJson<ContinuationResult>("/api/generate", requestBody);
-      setResult(nextResult);
-      if (typeof nextResult.usage.quotaRemaining === "number") {
-        setInviteStatus(`剩余 ${nextResult.usage.quotaRemaining} 次`);
       }
     } catch (nextError) {
       if (isAbortError(nextError)) {
@@ -1090,12 +1156,14 @@ export function GouweiWorkbench() {
   }
 
   async function continueContinuation(event: MouseEvent<HTMLButtonElement>) {
-    if (!result) {
-      setError("请先完成一次续写，再继续生成。");
+    if (!currentUser) {
+      setActiveTab("write");
+      setError(loginRequiredMessage);
       return;
     }
-    if (accessMode !== "invite") {
-      setError("继续生成当前只支持 Claude Code 邀请码模式。");
+
+    if (!result) {
+      setError("请先完成一次续写，再继续生成。");
       return;
     }
 
@@ -1123,17 +1191,12 @@ export function GouweiWorkbench() {
           generationMode: continueConfig.mode,
           thinkingEnabled: continueConfig.thinkingEnabled,
           length: continueConfig.length,
-          access: { mode: "invite", inviteCode },
+          access: { mode: "internal" },
         }),
       });
 
       if (!response.ok) {
         throw new Error(await readResponseError(response));
-      }
-
-      const quotaRemaining = parseQuota(response.headers.get("x-quota-remaining"));
-      if (typeof quotaRemaining === "number") {
-        setInviteStatus(`剩余 ${quotaRemaining} 次`);
       }
 
       const reader = response.body?.getReader();
@@ -1176,6 +1239,7 @@ export function GouweiWorkbench() {
       if (eventBuffer.trim()) {
         parseStreamBuffer(`${eventBuffer}\n\n`, handleStreamEvent);
       }
+      void refreshWorkspace();
     } catch (nextError) {
       if (isAbortError(nextError)) {
         addWorkflowLog("继续生成已停止", "已保留当前已经流出的正文。", "info");
@@ -1231,44 +1295,46 @@ export function GouweiWorkbench() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-2 rounded-lg border border-[#d8cdbc] bg-[#fffaf0] p-2 lg:min-w-[520px]">
-            <div className="grid grid-cols-2 rounded-md bg-[#f0e7d9] p-1">
-              {(["invite", "custom"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setAccessMode(mode)}
-                  className={cn(
-                    "h-8 rounded text-sm font-semibold transition",
-                    accessMode === mode ? "bg-[#171411] text-[#fffaf0]" : "text-[#6f6558]",
-                  )}
-                >
-                  {mode === "invite" ? "邀请码额度" : "自带 API"}
-                </button>
-              ))}
-            </div>
-            {accessMode === "invite" ? (
-              <div className="flex gap-2">
-                <input
-                  value={inviteCode}
-                  onChange={(event) => setInviteCode(event.target.value)}
-                  className="h-9 min-w-0 flex-1 rounded-md border border-[#d8cdbc] bg-white px-3 text-xs uppercase outline-none focus:border-[#176bff]"
-                />
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#d8cdbc] bg-[#fffaf0] p-2">
+            {authLoading ? (
+              <span className="inline-flex h-9 items-center gap-2 rounded-md bg-[#f0e7d9] px-3 text-xs font-semibold text-[#6f6558]">
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                检查登录
+              </span>
+            ) : currentUser ? (
+              <>
+                <span className="inline-flex h-9 items-center gap-2 rounded-md bg-[#eef4ff] px-3 text-xs font-semibold text-[#17488f]">
+                  <UserRound className="size-4" aria-hidden="true" />
+                  {currentUser.name}
+                </span>
+                <span className="inline-flex h-9 items-center rounded-md bg-[#f0e7d9] px-3 text-xs font-semibold text-[#6f6558]">
+                  内置 Kimi 模型
+                </span>
                 <button
                   type="button"
-                  onClick={checkInvite}
-                  className="inline-flex h-9 items-center gap-2 rounded-md bg-[#176bff] px-3 text-xs font-semibold text-white"
+                  onClick={logout}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-[#d8cdbc] bg-white px-3 text-xs font-semibold text-[#6f6558] transition hover:border-[#176bff] hover:text-[#17488f]"
                 >
-                  {busy === "invite" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <KeyRound aria-hidden="true" />}
-                  {inviteStatus || "查额度"}
+                  {busy === "auth" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <LogOut className="size-4" aria-hidden="true" />}
+                  退出
                 </button>
-              </div>
+              </>
             ) : (
-              <div className="grid gap-2 md:grid-cols-[1fr_120px_1fr]">
-                <input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} className="h-9 rounded-md border border-[#d8cdbc] px-3 text-xs outline-none" placeholder="Endpoint" />
-                <input value={model} onChange={(event) => setModel(event.target.value)} className="h-9 rounded-md border border-[#d8cdbc] px-3 text-xs outline-none" placeholder="模型" />
-                <input value={apiKey} onChange={(event) => setApiKey(event.target.value)} className="h-9 rounded-md border border-[#d8cdbc] px-3 text-xs outline-none" type="password" placeholder="API Key" />
-              </div>
+              <>
+                <span className="inline-flex h-9 items-center rounded-md bg-[#f0e7d9] px-3 text-xs font-semibold text-[#6f6558]">
+                  登录后可调用内置 Kimi
+                </span>
+                <button
+                  type="button"
+                  onClick={startZhihuLogin}
+                  disabled={busy === "auth"}
+                  title={`回调地址：${oauthRedirectUri}`}
+                  className="inline-flex h-9 items-center gap-2 rounded-md bg-[#176bff] px-3 text-xs font-semibold text-white transition hover:bg-[#0f58d6] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {busy === "auth" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <UserRound className="size-4" aria-hidden="true" />}
+                  {busy === "auth" ? "跳转中" : "使用知乎登录"}
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -1534,9 +1600,20 @@ export function GouweiWorkbench() {
               ) : null}
 
               {error ? (
-                <div className="mt-3 flex gap-2 rounded-lg border border-[#f4c0b6] bg-[#fff0ed] p-3 text-sm leading-6 text-[#9f3728]">
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-[#f4c0b6] bg-[#fff0ed] p-3 text-sm leading-6 text-[#9f3728]">
                   <CircleAlert aria-hidden="true" className="mt-0.5 shrink-0" />
-                  {error}
+                  <span className="min-w-0 flex-1">{error}</span>
+                  {!currentUser ? (
+                    <button
+                      type="button"
+                      onClick={startZhihuLogin}
+                      disabled={busy === "auth"}
+                      className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-[#176bff] px-2.5 text-xs font-semibold text-white transition hover:bg-[#0f58d6] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {busy === "auth" ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <UserRound className="size-3.5" aria-hidden="true" />}
+                      {busy === "auth" ? "跳转中" : "使用知乎登录"}
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </section>
@@ -1635,6 +1712,41 @@ export function GouweiWorkbench() {
                 <ShieldCheck aria-hidden="true" className="mt-0.5 shrink-0 text-[#9ad7b2]" />
                 输出默认保留原创续写边界，不复现隐藏正文。
               </p>
+              {generationRecords.length ? (
+                <details className="mt-3 rounded-lg border border-white/12 bg-[#201b16] p-3">
+                  <summary className="cursor-pointer list-none text-xs font-semibold text-[#89b5ff]">
+                    历史记录 · {generationRecords.length}
+                  </summary>
+                  <div className="mt-3 grid max-h-44 gap-2 overflow-auto">
+                    {generationRecords.slice(0, 8).map((record) => (
+                      <button
+                        key={record.id}
+                        type="button"
+                        onClick={() =>
+                          setResult({
+                            id: record.id,
+                            createdAt: record.createdAt,
+                            title: record.title,
+                            continuation: record.continuation,
+                            editorNotes,
+                            usage: {
+                              provider: record.provider || "claude-code",
+                              mode: record.mode,
+                              model: record.model,
+                            },
+                          })
+                        }
+                        className="rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-left text-xs leading-5 text-[#c9bca8] transition hover:border-[#89b5ff]/60"
+                      >
+                        <span className="block truncate font-semibold text-[#fffaf0]">{record.title}</span>
+                        <span className="mt-0.5 block truncate">
+                          {new Date(record.createdAt).toLocaleString()} · {record.styleLabel || "默认文风"}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
             </section>
           </div>
         ) : (
@@ -1986,9 +2098,20 @@ export function GouweiWorkbench() {
               ) : null}
 
               {error ? (
-                <div className="mt-3 flex gap-2 rounded-lg border border-[#f4c0b6] bg-[#fff0ed] p-3 text-sm leading-6 text-[#9f3728]">
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-[#f4c0b6] bg-[#fff0ed] p-3 text-sm leading-6 text-[#9f3728]">
                   <CircleAlert aria-hidden="true" className="mt-0.5 shrink-0" />
-                  {error}
+                  <span className="min-w-0 flex-1">{error}</span>
+                  {!currentUser ? (
+                    <button
+                      type="button"
+                      onClick={startZhihuLogin}
+                      disabled={busy === "auth"}
+                      className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-[#176bff] px-2.5 text-xs font-semibold text-white transition hover:bg-[#0f58d6] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {busy === "auth" ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <UserRound className="size-3.5" aria-hidden="true" />}
+                      {busy === "auth" ? "跳转中" : "使用知乎登录"}
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </section>

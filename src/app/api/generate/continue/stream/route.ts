@@ -1,12 +1,13 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { redeemInvite } from "@/lib/server/invite-store";
+import { requireUser } from "@/lib/server/auth";
 import {
   getClaudeCodeDaemon,
   shouldTryClaudeCode,
 } from "@/lib/server/claude-code-daemon";
 import { generationModeSchema } from "@/lib/server/generate-schema";
 import { safeError } from "@/lib/server/call-logger";
+import { saveGenerationRecord } from "@/lib/server/user-store";
 
 export const runtime = "nodejs";
 
@@ -15,8 +16,7 @@ const requestSchema = z.object({
   thinkingEnabled: z.boolean().optional(),
   length: z.enum(["short", "medium", "long"]),
   access: z.object({
-    mode: z.literal("invite"),
-    inviteCode: z.string().min(1),
+    mode: z.literal("internal"),
   }),
 });
 
@@ -42,7 +42,12 @@ function continuationPrompt(length: "short" | "medium" | "long") {
   ].join("\n");
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const session = await requireUser(request);
+  if (!session) {
+    return NextResponse.json({ error: "请先使用知乎登录后再继续生成" }, { status: 401 });
+  }
+
   const parsed = requestSchema.safeParse(await request.json());
 
   if (!parsed.success) {
@@ -66,11 +71,6 @@ export async function POST(request: Request) {
       { error: "当前没有可继续的 Claude Code 会话，请先完成一次生成。" },
       { status: 409 },
     );
-  }
-
-  const invite = await redeemInvite(payload.access.inviteCode, true);
-  if (!invite.ok) {
-    return NextResponse.json({ error: invite.reason }, { status: 403 });
   }
 
   const encoder = new TextEncoder();
@@ -121,6 +121,22 @@ export async function POST(request: Request) {
         if (!streamedText) {
           write(result.text);
         }
+        await saveGenerationRecord(
+          session.user.id,
+          {
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+            title: "继续生成",
+            continuation: streamedText || result.text,
+            editorNotes: [],
+            usage: {
+              provider: "claude-code",
+              mode,
+              model: result.model,
+            },
+          },
+          { selectedArc: "继续生成", mode },
+        );
         writeLog("继续生成完成", `${result.text.length} 个字符。`, "done");
       } catch (error) {
         if (safeError(error).name === "AbortError" || request.signal.aborted) {
@@ -148,7 +164,6 @@ export async function POST(request: Request) {
       "cache-control": "no-store",
       "x-accel-buffering": "no",
       "x-provider": "claude-code",
-      "x-quota-remaining": String(invite.remaining),
     },
   });
 }
