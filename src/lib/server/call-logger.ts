@@ -2,7 +2,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 
-export const PROMPT_VERSION = "gouwei-v0.7-paid-safe-preview";
+export const PROMPT_VERSION = "gouwei-v0.8-expert-writing-workflow";
 
 type LogEvent = {
   callId: string;

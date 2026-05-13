@@ -1,17 +1,13 @@
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const stamp = new Date()
-  .toISOString()
-  .replaceAll(":", "")
-  .replaceAll(".", "")
-  .replace("T", "-")
-  .replace("Z", "");
-const distDir = `.next-build-${stamp}`;
+const distDir = ".next-build";
 const nextBin = path.join(process.cwd(), "node_modules", "next", "dist", "bin", "next");
+const distPath = path.join(process.cwd(), distDir);
 
 console.log(`Using Next distDir: ${distDir}`);
+rmSync(distPath, { recursive: true, force: true });
 
 const child = spawn(process.execPath, [nextBin, "build"], {
   stdio: "inherit",

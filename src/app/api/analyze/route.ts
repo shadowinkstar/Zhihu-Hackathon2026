@@ -15,22 +15,13 @@ export const runtime = "nodejs";
 const requestSchema = z.object({
   sourceUrl: z.string().trim().optional(),
   sourceText: z.string().trim().optional(),
-  permission: z.enum(["public", "self_owned", "authorized"]).default("public"),
+  permission: z.literal("public").default("public"),
 });
 
 const sampleHooks = [
   "主角已经做出选择，但代价还没有真正落下。",
   "一个被轻描淡写带过的人物，明显藏着下一段剧情的钥匙。",
   "叙事里反复出现的物件还没有兑现，它适合成为转折机关。",
-];
-
-const mockCorpus = [
-  { title: "雨夜便利店的第七次停电", publishedAt: "2026-04-28", lengthClass: "long" as const },
-  { title: "我在知乎写悬疑故事踩过的三个坑", publishedAt: "2026-04-02", lengthClass: "short" as const },
-  { title: "那把伞后来去了哪里", publishedAt: "2026-03-18", lengthClass: "long" as const },
-  { title: "短篇：别在凌晨四点回头", publishedAt: "2026-02-20", lengthClass: "short" as const },
-  { title: "桥、旧书店和一个不肯收尾的人", publishedAt: "2025-12-11", lengthClass: "long" as const },
-  { title: "写故事时我为什么喜欢留一个空门", publishedAt: "2025-09-05", lengthClass: "short" as const },
 ];
 
 function pickTitle(sourceText?: string, fallback?: string) {
@@ -45,6 +36,79 @@ function pickTitle(sourceText?: string, fallback?: string) {
   }
 
   return fallback || "未命名的知乎长文";
+}
+
+function splitParagraphs(sourceText?: string) {
+  return (sourceText || "")
+    .split(/\n{2,}|\r?\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph.length >= 8);
+}
+
+function countMatches(value: string, pattern: RegExp) {
+  return Array.from(value.matchAll(pattern)).length;
+}
+
+function analyzeWritingStyle(sourceText?: string) {
+  const text = sourceText || "";
+  const paragraphs = splitParagraphs(text);
+  const sentenceCount = Math.max(1, countMatches(text, /[。！？!?]/g));
+  const dialogueCount = countMatches(text, /[“「『][^”」』]{1,80}[”」』]/g);
+  const questionCount = countMatches(text, /[？?]/g);
+  const firstPersonCount = countMatches(text, /我|我们|咱/g);
+  const hookWords = countMatches(text, /忽然|突然|可是|但|却|原来|直到|没想到|最后/g);
+  const avgSentenceLength = Math.round(text.length / sentenceCount);
+  const paragraphShape =
+    paragraphs.length >= 6 ? "多段推进" : paragraphs.length >= 3 ? "中段展开" : "少段压缩";
+  const pace = avgSentenceLength <= 22 ? "短句快切" : avgSentenceLength <= 42 ? "中速叙述" : "长句铺陈";
+  const perspective =
+    firstPersonCount >= 4 ? "第一人称贴身叙述" : dialogueCount >= 3 ? "对话推动叙事" : "第三人称近景叙事";
+  const suspense = hookWords + questionCount >= 5 ? "高频钩子" : hookWords >= 2 ? "中频转折" : "低钩子密度";
+  const dialogue = dialogueCount >= 4 ? "对话密集" : dialogueCount >= 1 ? "少量关键对话" : "叙述为主";
+
+  return {
+    paragraphs,
+    avgSentenceLength,
+    dimensions: [pace, paragraphShape, perspective, suspense, dialogue],
+    rhythm:
+      pace === "短句快切"
+        ? ["短句推进", "关键句独立成段", "转折后快速落点"]
+        : pace === "长句铺陈"
+          ? ["长句铺垫", "细节层层补足", "段尾回收信息"]
+          : ["中速叙述", "细节停顿", "段尾留钩"],
+    diction:
+      firstPersonCount >= 4
+        ? ["自我回忆", "感受判断", "克制抒情"]
+        : ["日常词汇", "具体物件", "轻解释"],
+    plotMoves:
+      suspense === "高频钩子"
+        ? ["连续设疑", "旧物回收", "信息反转"]
+        : ["动机补足", "关系推进", "开放结尾"],
+    prompt: `参考炼化样本分析出的表达方式：${[pace, paragraphShape, perspective, suspense, dialogue].join("、")}。续写时保留这些叙事功能，不复制原句，不冒充原作者，不复现隐藏付费正文。`,
+    summary: `已从炼化样本分析：${[pace, paragraphShape, perspective, suspense].join("、")}。`,
+  };
+}
+
+function buildCorpusPlan(sourceText?: string) {
+  const paragraphs = splitParagraphs(sourceText);
+  const selected = paragraphs
+    .map((paragraph, index) => ({
+      id: `user-sample-${index + 1}`,
+      title: `可见片段 ${index + 1}`,
+      publishedAt: new Date(Date.now() - index * 86400000 * 7).toISOString().slice(0, 10),
+      lengthClass: paragraph.length >= 160 ? "long" as const : "short" as const,
+      recencyWeight: Number(Math.max(0.35, 1 - index * 0.12).toFixed(2)),
+      selected: index < 8,
+    }))
+    .filter((sample) => sample.selected);
+
+  return {
+    strategy:
+      selected.length > 0
+        ? "从当前可见文本切分片段，按段落顺序近似时间权重，长短段混合提取节奏、词汇、桥段和禁区。"
+        : "未取得可分析片段。需要用户粘贴可见内容后再生成文风结果。",
+    samples: selected,
+  };
 }
 
 async function readPublicTitle(sourceUrl?: string) {
@@ -93,39 +157,30 @@ function buildAnalysis(input: z.infer<typeof requestSchema>, publicTitle?: strin
   const title = pickTitle(input.sourceText, publicTitle || undefined);
   const isZhihu = Boolean(normalizedUrl.includes("zhihu.com"));
   const hasUrl = Boolean(normalizedUrl);
+  const style = analyzeWritingStyle(input.sourceText);
+  const corpusPlan = buildCorpusPlan(input.sourceText);
 
   return {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
     source: {
       title,
-      author: isZhihu ? "知乎作者（待授权确认）" : "用户提供文本",
+      author: isZhihu ? "知乎作者" : "用户提供文本",
       sourceType: hasUrl ? "知乎链接 / 公开元信息" : "用户上传草稿",
       publicOnly: input.permission === "public",
-      sourceNote:
-        input.permission === "public"
-          ? "仅使用公开可访问信息与用户粘贴片段，不读取隐藏付费正文。"
-          : "用户声明拥有文本使用权或已获得授权，可用于风格分析与续写。",
+      sourceNote: "仅使用接口返回正文、公开可访问信息与用户粘贴片段，不读取隐藏付费正文。",
       permission: input.permission,
     },
     styleProfile: {
       id: "analyzed-author-style",
-      label: "作者近作炼化",
+      label: "自制文风",
       source: "analysis",
-      summary: "近期样本权重更高，长短文各半，提取节奏、转场、口头禅和禁区。",
-      prompt:
-        "参考作者公开近作的节奏、转场、冲突组织和收尾习惯；不要复制句子，不要冒充作者本人，不要复现隐藏付费正文。",
+      summary: style.summary,
+      prompt: style.prompt,
+      provenance: "由文风炼化生成。",
+      dimensions: style.dimensions,
     },
-    corpusPlan: {
-      strategy:
-        "按时间衰减抽样：近 60 天权重最高，长文与短文各占约一半；样本只用于归纳叙事功能，不保存原文全文。",
-      samples: mockCorpus.map((item, index) => ({
-        id: `sample-${index + 1}`,
-        ...item,
-        recencyWeight: Number((1 - index * 0.12).toFixed(2)),
-        selected: index < 4,
-      })),
-    },
+    corpusPlan,
     story: {
       premise:
         textLength > 80
@@ -143,18 +198,18 @@ function buildAnalysis(input: z.infer<typeof requestSchema>, publicTitle?: strin
       name: "dogtail-style.skill",
       version: "0.1.0",
       summary: "已归纳叙事节奏、常用桥段和不可触碰的版权边界。",
-      rhythm: ["短句推进悬念", "中段用细节停顿", "结尾留下可续写钩子"],
-      diction: ["日常口语", "轻微荒诞", "克制吐槽", "知乎式解释补刀"],
-      plotMoves: ["伏笔回收", "视角错位", "题材互转", "看似跑偏但服务主线的反转"],
-      avoid: ["复现大段原文", "声称原作者授权", "绕过付费墙", "生成可混淆为原作的新章节"],
+      rhythm: style.rhythm,
+      diction: style.diction,
+      plotMoves: style.plotMoves,
+      avoid: ["复现大段原文", "声称原作者", "绕过付费墙", "生成可混淆为原作的新章节"],
       prompt:
         "你是续写协作编辑。请学习节奏、叙事功能和结构偏好，不要模仿受保护文本的独特表达，不要声称自己是原作者。",
     },
     guardrails: {
-      status: input.permission === "public" ? "needs_review" : "ready",
+      status: "needs_review",
       notices: [
         "输出默认标识为 AI 辅助创作。",
-        "公开链接只抽取标题、简介和用户可合法提供的片段。",
+        "知乎链接只抽取标题、简介和用户提供的片段。",
         "风格 Skill 记录可查看、可删除、可导出。",
       ],
     },
@@ -182,6 +237,33 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: "输入格式不正确", issues: parsed.error.flatten() },
       { status: 400 },
+    );
+  }
+
+  if (!parsed.data.sourceText?.trim()) {
+    await logCallEvent({
+      callId,
+      event: "analyze.insufficient_samples",
+      route: "/api/analyze",
+      ok: false,
+      startedAt: startedAt.toISOString(),
+      endedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAt.getTime(),
+      promptVersion: PROMPT_VERSION,
+      request: {
+        rawSourceUrl: parsed.data.sourceUrl,
+        sourceUrl: extractFirstUrl(parsed.data.sourceUrl),
+        permission: parsed.data.permission,
+        sourceText: privateTextSummary(parsed.data.sourceText),
+      },
+      error: {
+        message: "没有可炼化的正文样本",
+      },
+    });
+
+    return NextResponse.json(
+      { error: "没有可炼化的正文样本，请先粘贴可见片段。" },
+      { status: 422 },
     );
   }
 

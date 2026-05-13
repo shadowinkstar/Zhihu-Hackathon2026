@@ -1,13 +1,15 @@
-export type SourcePermission = "public" | "self_owned" | "authorized";
-
 export type ModelAccessMode = "invite" | "custom";
+
+export type GenerationMode = "quick" | "expert";
 
 export type StyleProfile = {
   id: string;
   label: string;
   summary: string;
   prompt: string;
-  source: "builtin" | "analysis" | "neutral";
+  source: "preset" | "analysis" | "neutral";
+  provenance?: string;
+  dimensions?: string[];
 };
 
 export type CorpusSample = {
@@ -39,7 +41,7 @@ export type NarrativeAnalysis = {
     sourceType: string;
     publicOnly: boolean;
     sourceNote: string;
-    permission: SourcePermission;
+    permission: "public";
   };
   styleProfile: StyleProfile;
   corpusPlan: {
@@ -73,6 +75,8 @@ export type GenerateRequest = {
   sourceText?: string;
   selectedArc: string;
   styleProfile?: StyleProfile;
+  generationMode?: GenerationMode;
+  thinkingEnabled?: boolean;
   length: "short" | "medium" | "long";
   styleIntensity: number;
   access:
@@ -95,7 +99,8 @@ export type ContinuationResult = {
   continuation: string;
   editorNotes: string[];
   usage: {
-    provider: "demo-invite" | "custom-openai-compatible" | "internal-model";
+    provider: "demo-invite" | "custom-openai-compatible" | "internal-model" | "claude-code";
+    mode?: GenerationMode;
     model?: string;
     quotaRemaining?: number;
   };

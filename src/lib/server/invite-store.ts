@@ -17,12 +17,12 @@ const defaultStore: InviteStore = {
   invitations: {
     "ZH-HACK-2026": {
       label: "黑客松内置模型额度",
-      limit: 20,
+      limit: 200,
       used: 0,
     },
     "DOGTAIL-DEMO": {
       label: "现场演示备用额度",
-      limit: 8,
+      limit: 80,
       used: 0,
     },
   },

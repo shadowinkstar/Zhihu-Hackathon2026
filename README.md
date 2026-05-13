@@ -26,9 +26,10 @@ http://127.0.0.1:3000
 
 ## 核心功能
 
-- 文章输入：支持知乎链接、用户粘贴片段、自有草稿和授权文本声明。
+- 文章输入：支持知乎故事接口、知乎链接、用户粘贴片段和自有草稿。
 - 风格炼化：生成 `dogtail-style.skill` 摘要，包含节奏、词汇、桥段和禁区。
-- 续写生成：支持邀请码额度模型，也支持用户登记 OpenAI-compatible API。
+- 续写生成：邀请码模式通过 Claude Code 常驻进程流式生成，也支持用户登记 OpenAI-compatible API。
+- 生成模式：快速、专家两档；可按需开启模型思考。
 - 版权护栏：默认禁止绕过付费墙、复现隐藏正文、冒充原作者。
 - 主页声明：生成用户主页预览、AI 辅助声明、原文跳转和下架入口。
 
@@ -55,6 +56,7 @@ http://127.0.0.1:3000
   "analysis": {},
   "sourceText": "用户有权提供的片段",
   "selectedArc": "付费断口安全续写",
+  "generationMode": "quick",
   "length": "medium",
   "styleIntensity": 56,
   "access": {
@@ -62,6 +64,21 @@ http://127.0.0.1:3000
     "inviteCode": "ZH-HACK-2026"
   }
 }
+```
+
+`generationMode` 可选值：
+
+- `quick`：快速模式，直接出稿。
+- `expert`：专家模式，单上下文深度推演后出稿。
+
+### `POST /api/generate/stream`
+
+邀请码模式的流式生成接口。请求体与 `/api/generate` 相同，但只接受 `access.mode = "invite"`；响应体是 Server-Sent Events，配套元信息放在响应头：
+
+```text
+x-generation-mode: quick | expert
+x-provider: claude-code | demo-invite
+x-quota-remaining: 19
 ```
 
 ### `POST /api/invite/redeem`
@@ -103,9 +120,18 @@ npm run logs:latest
 
 邀请码模式会按顺序尝试：
 
-1. Anthropic/Claude-compatible 环境变量
-2. OpenAI-compatible 内置接口
-3. 本地 mock 文本
+1. Claude Code 常驻进程
+2. Anthropic/Claude-compatible 环境变量
+3. OpenAI-compatible 内置接口
+4. 本地 mock 文本
+
+流式接口默认使用项目本地 Claude Code 配置，不需要改全局模型配置：
+
+```bash
+CLAUDE_CODE_ENABLED=1
+CLAUDE_CODE_PATH=claude
+CLAUDE_CODE_TIMEOUT_MS=180000
+```
 
 ```bash
 ANTHROPIC_BASE_URL=https://api.anthropic.com
@@ -136,6 +162,5 @@ INTERNAL_MODEL_NAME=your-model-name
 
 - 接入知乎官方开放 API，替换当前公开标题抓取和文本粘贴流程。
 - 将 Skill 导出为标准 `SKILL.md` 文件夹，沉淀作者/题材协作模板。
-- 增加多 Agent 审稿流：剧情架构师、文风编辑、版权哨兵、发布助理。
-- 自动生成 LoRA/SFT 数据集，只允许使用自有或授权语料。
+- 自动生成 LoRA/SFT 数据集，只使用用户明确提供的语料。
 - 增加账号系统和作品广场，用于人气奖曝光与项目广场占位。
