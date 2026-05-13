@@ -38,6 +38,7 @@ dev-server*.log
 /data/*.json
 /data/**/*.jsonl
 /artifacts-*.png
+/.deploy/
 
 # env files (can opt-in for committing if needed)
 .env*
