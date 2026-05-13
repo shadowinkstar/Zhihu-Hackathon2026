@@ -1,9 +1,16 @@
 import { createHmac, randomUUID } from "node:crypto";
+import { remember } from "@/lib/server/memory-cache";
 
 type ZhihuApiResponse<T> = {
   status: number;
   msg?: string;
   data: T | null;
+};
+
+type ZhihuDeveloperResponse<T> = {
+  Code: number;
+  Message?: string;
+  Data: T;
 };
 
 type StoryListItem = {
@@ -25,6 +32,29 @@ type StoryDetailItem = {
   content?: string;
 };
 
+type ZhihuSearchData = {
+  HasMore: boolean;
+  SearchHashId?: string;
+  Items: Array<{
+    Title: string;
+    ContentType: string;
+    ContentID: string;
+    ContentText: string;
+    Url: string;
+    CommentCount: number;
+    VoteUpCount: number;
+    AuthorName: string;
+    AuthorAvatar: string;
+    AuthorBadge?: string;
+    AuthorBadgeText?: string;
+    EditTime: number;
+    CommentInfoList?: Array<{ Content: string }>;
+    AuthorityLevel: string;
+    RankingScore: number;
+  }>;
+  EmptyReason?: string;
+};
+
 export type HackathonStorySummary = {
   workId: string;
   title: string;
@@ -44,8 +74,26 @@ export type HackathonStoryDetail = {
   content: string;
 };
 
+export type ZhihuSearchItem = {
+  title: string;
+  contentType: string;
+  contentId: string;
+  contentText: string;
+  url: string;
+  commentCount: number;
+  voteUpCount: number;
+  authorName: string;
+  editTime: number;
+  authorityLevel: string;
+  rankingScore: number;
+  comments: string[];
+};
+
 const baseUrl = "https://openapi.zhihu.com";
+const developerBaseUrl = "https://developer.zhihu.com";
 const extraInfo = "";
+const storyListTtlMs = 10 * 60 * 1000;
+const storyDetailTtlMs = 30 * 60 * 1000;
 
 function credentials() {
   const appKey = process.env.ZHIHU_APP_KEY;
@@ -56,6 +104,15 @@ function credentials() {
   }
 
   return { appKey, appSecret };
+}
+
+function developerAccessSecret() {
+  return (
+    process.env.ZHIHU_ACCESS_SECRET ||
+    process.env.ZHIHU_DEVELOPER_ACCESS_SECRET ||
+    process.env.ZHIHU_OPENAPI_ACCESS_SECRET ||
+    ""
+  ).trim();
 }
 
 function signedHeaders() {
@@ -99,35 +156,96 @@ async function zhihuGet<T>(path: string, searchParams?: Record<string, string>) 
   return data.data;
 }
 
-export async function listHackathonStories(): Promise<HackathonStorySummary[]> {
-  const data = await zhihuGet<StoryListItem[]>("/openapi/hackathon_story/list");
+async function developerGet<T>(path: string, searchParams: Record<string, string>) {
+  const accessSecret = developerAccessSecret();
+  if (!accessSecret) {
+    throw new Error("缺少 ZHIHU_ACCESS_SECRET，无法调用知乎搜索 API");
+  }
 
-  return (data || []).map((story) => ({
-    workId: story.work_id,
-    title: story.title,
-    description: story.description || "",
-    labels: story.labels || [],
-    artwork: story.artwork,
-    tabArtwork: story.tab_artwork,
-  }));
+  const url = new URL(path, developerBaseUrl);
+  Object.entries(searchParams).forEach(([key, value]) => {
+    url.searchParams.set(key, value);
+  });
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessSecret}`,
+      "X-Request-Timestamp": String(Math.floor(Date.now() / 1000)),
+      "Content-Type": "application/json",
+    },
+    cache: "no-store",
+  });
+
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(body || `知乎开发者 API 返回 ${response.status}`);
+  }
+
+  const data = JSON.parse(body) as ZhihuDeveloperResponse<T>;
+  if (data.Code !== 0) {
+    throw new Error(data.Message || `知乎开发者 API 请求失败：${data.Code}`);
+  }
+
+  return data.Data;
+}
+
+export async function listHackathonStories(): Promise<HackathonStorySummary[]> {
+  return remember("zhihu:stories:list", storyListTtlMs, async () => {
+    const data = await zhihuGet<StoryListItem[]>("/openapi/hackathon_story/list");
+
+    return (data || []).map((story) => ({
+      workId: story.work_id,
+      title: story.title,
+      description: story.description || "",
+      labels: story.labels || [],
+      artwork: story.artwork,
+      tabArtwork: story.tab_artwork,
+    }));
+  });
 }
 
 export async function getHackathonStoryDetail(workId: string): Promise<HackathonStoryDetail> {
-  const data = await zhihuGet<StoryDetailItem>("/openapi/hackathon_story/detail", {
-    work_id: workId,
+  return remember(`zhihu:stories:detail:${workId}`, storyDetailTtlMs, async () => {
+    const data = await zhihuGet<StoryDetailItem>("/openapi/hackathon_story/detail", {
+      work_id: workId,
+    });
+
+    if (!data?.work_id || !data.content) {
+      throw new Error("story not found");
+    }
+
+    return {
+      workId: data.work_id,
+      chapterName: data.chapter_name || "正文",
+      authorName: data.author_name || "知乎作者",
+      authorAvatar: data.author_avatar,
+      labels: data.labels || [],
+      introduction: data.introduction || "",
+      content: data.content,
+    };
+  });
+}
+
+export async function searchZhihuContent(query: string, count = 10): Promise<ZhihuSearchItem[]> {
+  const normalizedCount = Math.min(10, Math.max(1, count));
+  const data = await developerGet<ZhihuSearchData>("/api/v1/content/zhihu_search", {
+    Query: query,
+    Count: String(normalizedCount),
   });
 
-  if (!data?.work_id || !data.content) {
-    throw new Error("story not found");
-  }
-
-  return {
-    workId: data.work_id,
-    chapterName: data.chapter_name || "正文",
-    authorName: data.author_name || "知乎作者",
-    authorAvatar: data.author_avatar,
-    labels: data.labels || [],
-    introduction: data.introduction || "",
-    content: data.content,
-  };
+  return (data.Items || []).map((item) => ({
+    title: item.Title,
+    contentType: item.ContentType,
+    contentId: item.ContentID,
+    contentText: item.ContentText,
+    url: item.Url,
+    commentCount: item.CommentCount,
+    voteUpCount: item.VoteUpCount,
+    authorName: item.AuthorName,
+    editTime: item.EditTime,
+    authorityLevel: item.AuthorityLevel,
+    rankingScore: item.RankingScore,
+    comments: (item.CommentInfoList || []).map((comment) => comment.Content).filter(Boolean),
+  }));
 }

@@ -1,13 +1,10 @@
 import type { ContinuationResult, GenerateRequest, GenerationMode } from "@/lib/types";
 
 export function mockContinuation(payload: GenerateRequest): string {
-  const { analysis, selectedArc, styleIntensity } = payload;
+  const { analysis, selectedArc } = payload;
   const protagonist = analysis.story.characters[0] || "叙述者";
   const hook = analysis.story.unresolvedHooks[0];
-  const styleHint =
-    styleIntensity > 70
-      ? "句子故意压得很短，像有人在门外敲了三下。"
-      : "叙述保持平稳，把荒诞藏在正常语气下面。";
+  const styleHint = payload.styleProfile?.summary || "叙述保持平稳，把荒诞藏在正常语气下面。";
 
   return `【AI 续写草稿｜方向：${selectedArc}】
 

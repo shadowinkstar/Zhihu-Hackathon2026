@@ -14,7 +14,6 @@ export function buildGenerateRequestLog(payload: GenerateRequest, generationMode
     selectedArc: payload.selectedArc,
     generationMode,
     length: payload.length,
-    styleIntensity: payload.styleIntensity,
     styleProfile: payload.styleProfile
       ? {
           id: payload.styleProfile.id,
@@ -42,7 +41,7 @@ export function buildGeneratePromptLog(payload: GenerateRequest, promptMessages:
     version: PROMPT_VERSION,
     system: promptMessages[0].content,
     userTemplate:
-      "作品标题、剧情前提、人物、未解钩子、文风节奏、当前文风、情节方向、篇幅要求、文风强度、用户片段摘要。",
+      "作品标题、剧情前提、人物、未解钩子、文风节奏、当前文风、文风协作提示、情节方向、篇幅要求、用户片段摘要。",
     userSourceText: privateTextSummary(payload.sourceText),
     userRedacted: payload.sourceText
       ? promptMessages[1].content.replace(

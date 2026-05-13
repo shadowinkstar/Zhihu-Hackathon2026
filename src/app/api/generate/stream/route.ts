@@ -139,10 +139,17 @@ export async function POST(request: Request) {
       const close = () => {
         if (!closed) {
           closed = true;
-          controller.close();
+          try {
+            controller.close();
+          } catch {
+            // Client may have already closed the stream after pressing stop.
+          }
         }
       };
       const writeEvent = (event: StreamEvent) => {
+        if (closed || request.signal.aborted) {
+          return;
+        }
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       };
       const writeLog = (
@@ -223,8 +230,9 @@ export async function POST(request: Request) {
           "通过 Claude Code 调用当前项目模型配置。",
           "info",
         );
-        const claudeResult = await getClaudeCodeDaemon(thinkingEnabled).run(payload, {
+        const claudeResult = await getClaudeCodeDaemon(thinkingEnabled, generationMode).run(payload, {
           mode: generationMode,
+          signal: request.signal,
           onText: write,
           onThinking: thinkingEnabled ? writeReasoning : undefined,
           onLog: writeLog,
@@ -295,6 +303,13 @@ export async function POST(request: Request) {
           },
         });
       } catch (error) {
+        if (safeError(error).name === "AbortError" || request.signal.aborted) {
+          if (!closed) {
+            writeLog("生成已停止", "已保留当前已生成正文，可继续生成后续。", "info");
+          }
+          return;
+        }
+
         writeLog(
           streamedText ? "Claude Code 中途结束" : "Claude Code 调用失败",
           safeError(error).message || "常驻进程没有拿到可用正文。",
@@ -324,6 +339,9 @@ export async function POST(request: Request) {
       } finally {
         close();
       }
+    },
+    cancel() {
+      getClaudeCodeDaemon(thinkingEnabled, generationMode).cancelActive("用户已停止生成");
     },
   });
 

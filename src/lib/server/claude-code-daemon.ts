@@ -7,6 +7,7 @@ type ClaudeCodeStatus = "running" | "done" | "error" | "info";
 
 type ClaudeCodeRunOptions = {
   mode: GenerationMode;
+  signal?: AbortSignal;
   onText?: (chunk: string) => void;
   onThinking?: (chunk: string) => void;
   onLog?: (title: string, detail?: string, status?: ClaudeCodeStatus) => void;
@@ -24,6 +25,7 @@ type ClaudeRunState = {
   startedAt: number;
   firstThinkingAt?: number;
   firstTextAt?: number;
+  cleanup?: () => void;
 };
 
 export type ClaudeCodeRunResult = {
@@ -40,6 +42,10 @@ export type ClaudeCodeRunResult = {
 };
 
 const decoder = new TextDecoder("utf-8");
+
+function isExpertMode(mode: GenerationMode) {
+  return mode === "expert";
+}
 
 function claudeExecutable() {
   return process.env.CLAUDE_CODE_PATH || "claude";
@@ -58,7 +64,29 @@ function runTimeoutMs(mode: GenerationMode) {
   return mode === "expert" ? 180000 : 120000;
 }
 
-function buildClaudeCodePrompt(payload: GenerateRequest) {
+function toolArgsFor(mode: GenerationMode) {
+  if (isExpertMode(mode)) {
+    return ["--tools", "WebSearch,WebFetch"];
+  }
+
+  return ["--tools", ""];
+}
+
+function toolPolicyPrompt(mode: GenerationMode) {
+  if (isExpertMode(mode)) {
+    return [
+      "专家模式工具策略：",
+      "- 可以使用 WebSearch / WebFetch 查询公开资料，用于确认题材背景、历史常识、专有名词或公开设定。",
+      "- 不要使用本地文件、Shell、代码编辑、项目检索、浏览器自动化或任何会访问用户未提供正文的能力。",
+      "- 不得绕过登录、付费墙、平台限制，不得推断隐藏正文。",
+      "- 工具检索只服务于正文质量，最终回复仍必须只包含中文续写正文。",
+    ].join("\n");
+  }
+
+  return "快速模式工具策略：不要调用工具，不要检索资料，直接基于用户提供片段和结构化分析生成正文。";
+}
+
+function buildClaudeCodePrompt(payload: GenerateRequest, mode: GenerationMode) {
   const { system, messages } = buildClaudeMessages(payload);
   const userText = messages
     .map((message) => message.content)
@@ -66,7 +94,7 @@ function buildClaudeCodePrompt(payload: GenerateRequest) {
 
   return [
     "你正在作为“狗尾续貂？”工作台里的创作智能体运行。",
-    "不要调用工具，不要读取文件，不要解释执行过程。",
+    toolPolicyPrompt(mode),
     payload.thinkingEnabled === false
       ? "模型思考已关闭：直接生成正文，尽量减少推理展开；最终回复必须只包含中文续写正文。"
       : "模型思考已开启：你可以在推理过程中分析文风、剧情钩子、续写策略；最终回复必须只包含中文续写正文。",
@@ -94,6 +122,24 @@ function safeError(error: unknown) {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+function abortError(message: string) {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+function compactToolInput(input: unknown) {
+  if (input === undefined) {
+    return undefined;
+  }
+
+  try {
+    return JSON.stringify(input).replace(/\s+/g, " ").slice(0, 180);
+  } catch {
+    return String(input).replace(/\s+/g, " ").slice(0, 180);
+  }
+}
+
 class ClaudeCodeDaemon {
   private child: ChildProcessWithoutNullStreams | null = null;
   private lineBuffer = "";
@@ -101,6 +147,7 @@ class ClaudeCodeDaemon {
   private queue: Promise<void> = Promise.resolve();
   private warmPromise: Promise<void> | null = null;
   private startedAt = 0;
+  private lastSessionId: string | undefined;
 
   constructor(private readonly thinkingEnabled: boolean) {}
 
@@ -112,7 +159,11 @@ class ClaudeCodeDaemon {
     return Boolean(this.active);
   }
 
-  ensureStarted(onLog?: ClaudeCodeRunOptions["onLog"]) {
+  hasSession() {
+    return Boolean(this.lastSessionId);
+  }
+
+  ensureStarted(mode: GenerationMode, onLog?: ClaudeCodeRunOptions["onLog"]) {
     if (this.child && !this.child.killed) {
       return;
     }
@@ -125,11 +176,11 @@ class ClaudeCodeDaemon {
       "--output-format",
       "stream-json",
       "--include-partial-messages",
-      "--no-session-persistence",
       "--permission-mode",
       "dontAsk",
       "--thinking",
       this.thinkingEnabled ? "enabled" : "disabled",
+      ...toolArgsFor(mode),
     ];
 
     if (this.thinkingEnabled) {
@@ -138,6 +189,10 @@ class ClaudeCodeDaemon {
 
     if (shouldUseBareMode()) {
       args.push("--bare");
+    }
+
+    if (this.lastSessionId) {
+      args.push("--resume", this.lastSessionId);
     }
 
     this.startedAt = Date.now();
@@ -153,9 +208,11 @@ class ClaudeCodeDaemon {
 
     onLog?.(
       "Claude Code 常驻进程已启动",
-      this.thinkingEnabled
-        ? `PID ${this.child.pid ?? "unknown"}，模型思考开启`
-        : `PID ${this.child.pid ?? "unknown"}，模型思考关闭`,
+      [
+        `PID ${this.child.pid ?? "unknown"}`,
+        this.thinkingEnabled ? "模型思考开启" : "模型思考关闭",
+        isExpertMode(mode) ? "专家模式可用公开检索" : "快速模式禁用工具",
+      ].join("，"),
       "info",
     );
 
@@ -203,7 +260,11 @@ class ClaudeCodeDaemon {
   }
 
   run(payload: GenerateRequest, options: ClaudeCodeRunOptions) {
-    return this.enqueueRaw(buildClaudeCodePrompt(payload), options, false);
+    return this.enqueueRaw(buildClaudeCodePrompt(payload, options.mode), options, false);
+  }
+
+  runPrompt(prompt: string, options: ClaudeCodeRunOptions) {
+    return this.enqueueRaw(prompt, options, false);
   }
 
   private enqueueRaw(
@@ -214,7 +275,12 @@ class ClaudeCodeDaemon {
     const execution = this.queue.then(
       () =>
         new Promise<ClaudeCodeRunResult>((resolve, reject) => {
-          this.ensureStarted(options.onLog);
+          if (options.signal?.aborted) {
+            reject(abortError("生成已停止"));
+            return;
+          }
+
+          this.ensureStarted(options.mode, options.onLog);
 
           const child = this.child;
           if (!child || child.killed) {
@@ -228,6 +294,9 @@ class ClaudeCodeDaemon {
           }, runTimeoutMs(options.mode));
 
           const startedAt = Date.now();
+          const onAbort = () => {
+            this.cancelActive("用户已停止生成");
+          };
           this.active = {
             options,
             text: "",
@@ -235,14 +304,20 @@ class ClaudeCodeDaemon {
             assistantText: "",
             resolve: (result) => {
               clearTimeout(timer);
+              this.active?.cleanup?.();
               resolve(result);
             },
             reject: (error) => {
               clearTimeout(timer);
+              this.active?.cleanup?.();
               reject(error);
             },
             startedAt,
+            cleanup: options.signal
+              ? () => options.signal?.removeEventListener("abort", onAbort)
+              : undefined,
           };
+          options.signal?.addEventListener("abort", onAbort, { once: true });
 
           if (!quiet) {
             options.onLog?.(
@@ -303,7 +378,12 @@ class ClaudeCodeDaemon {
         };
       };
       message?: {
-        content?: Array<{ type?: string; text?: string }>;
+        content?: Array<{
+          type?: string;
+          text?: string;
+          name?: string;
+          input?: unknown;
+        }>;
       };
       is_error?: boolean;
       error?: string;
@@ -317,6 +397,7 @@ class ClaudeCodeDaemon {
 
     if (record.session_id) {
       active.sessionId = record.session_id;
+      this.lastSessionId = record.session_id;
     }
 
     if (record.event?.type === "message_start") {
@@ -359,6 +440,16 @@ class ClaudeCodeDaemon {
     }
 
     if (record.type === "assistant" && Array.isArray(record.message?.content)) {
+      for (const block of record.message.content) {
+        if (block.type === "tool_use") {
+          active.options.onLog?.(
+            `调用公开检索：${block.name || "Web"}`,
+            compactToolInput(block.input),
+            "running",
+          );
+        }
+      }
+
       active.assistantText = record.message.content
         .filter((block) => block.type === "text" && block.text)
         .map((block) => block.text)
@@ -382,6 +473,8 @@ class ClaudeCodeDaemon {
           firstTextMs: active.firstTextAt ? active.firstTextAt - active.startedAt : undefined,
         },
       };
+      this.lastSessionId = result.sessionId || this.lastSessionId;
+      active.cleanup?.();
       this.active = null;
 
       if (record.is_error || !result.text) {
@@ -396,7 +489,20 @@ class ClaudeCodeDaemon {
   private failActive(error: Error) {
     const active = this.active;
     this.active = null;
+    active?.cleanup?.();
     active?.reject(error);
+  }
+
+  cancelActive(reason = "生成已停止") {
+    const active = this.active;
+    if (!active) {
+      return false;
+    }
+
+    active.options.onLog?.("停止生成", "已请求 Claude Code 中断当前生成。", "info");
+    this.failActive(abortError(reason));
+    this.restart();
+    return true;
   }
 
   private restart() {
@@ -409,19 +515,16 @@ class ClaudeCodeDaemon {
 }
 
 const globalForClaude = globalThis as typeof globalThis & {
-  __gouweiClaudeCodeDaemons?: {
-    thinking?: ClaudeCodeDaemon;
-    direct?: ClaudeCodeDaemon;
-  };
+  __gouweiClaudeCodeDaemons?: Record<string, ClaudeCodeDaemon>;
 };
 
 export function shouldTryClaudeCode() {
   return process.env.CLAUDE_CODE_ENABLED !== "0";
 }
 
-export function getClaudeCodeDaemon(thinkingEnabled = true) {
+export function getClaudeCodeDaemon(thinkingEnabled = true, mode: GenerationMode = "quick") {
   globalForClaude.__gouweiClaudeCodeDaemons ??= {};
-  const key = thinkingEnabled ? "thinking" : "direct";
+  const key = `${mode}:${thinkingEnabled ? "thinking" : "direct"}`;
   globalForClaude.__gouweiClaudeCodeDaemons[key] ??= new ClaudeCodeDaemon(thinkingEnabled);
   return globalForClaude.__gouweiClaudeCodeDaemons[key];
 }

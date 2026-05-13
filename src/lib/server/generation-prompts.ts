@@ -20,7 +20,7 @@ function workflowGuide(payload: GenerateRequest) {
       "1. 边界审读：确认用户片段、公开信息和不可触碰的隐藏/付费正文边界。",
       "2. 续写诊断：提炼断口处最该延续的读者期待、人物动机、冲突压力和未解伏笔。",
       "3. 大纲设计：先拟定一个简洁续写大纲，包含开场承接、关键转折、情绪变化、伏笔处理和结尾钩子。",
-      "4. 起草正文：按大纲写成自然中文叙事，优先保证人物行为可信、场景推进顺畅、文风与用户选择的强度一致。",
+      "4. 起草正文：按大纲写成自然中文叙事，优先保证人物行为可信、场景推进顺畅、文风与用户选择一致。",
       "5. 编辑校对：检查连续性、重复表达、节奏拖沓、口吻漂移、过度解释和版权风险，必要时重写问题段落。",
       "6. 终稿输出：只交付校对后的续写正文，保留继续编辑和继续连载的空间。",
     ].join("\n");
@@ -39,12 +39,6 @@ export function buildMessages(payload: GenerateRequest): ChatMessage[] {
     summary: "只保持剧情连贯，不额外套用文风。",
     prompt: "保持剧情连贯、语言自然，不模仿任何特定作者。",
   };
-  const styleGuide =
-    payload.styleIntensity >= 70
-      ? "风格强度较高：明显参考节奏、转场和叙事结构，但不要复刻原文句子。"
-      : payload.styleIntensity >= 35
-        ? "风格强度中等：参考叙事节奏和人物动机，表达保持自然。"
-        : "风格强度较低：只使用剧情结构，不刻意贴近原文口吻。";
   const thinkingGuide =
     payload.thinkingEnabled === false
       ? "模型思考关闭：直接生成正文，减少推理展开。"
@@ -72,10 +66,9 @@ ${workflowGuide(payload)}`,
 未解钩子：${analysis.story.unresolvedHooks.join("；")}
 文风节奏：${analysis.styleSkill.rhythm.join("；")}
 当前文风：${styleProfile.label}。${styleProfile.summary}
+文风协作提示：${styleProfile.prompt}
 情节方向：${payload.selectedArc}
 篇幅要求：${lengthGuide(payload.length)}
-文风强度：${payload.styleIntensity}/100
-风格策略：${styleGuide}
 用户提供片段：
 ${payload.sourceText || "未提供正文片段，请只基于公开元信息与结构化设定续写。"}
 
