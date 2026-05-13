@@ -210,8 +210,17 @@ const styleMaterialModes: Array<{
 
 const minimumStyleCount = 3;
 
+function createClientId(prefix = "id") {
+  const randomUUID = globalThis.crypto?.randomUUID;
+  if (typeof randomUUID === "function") {
+    return `${prefix}-${randomUUID.call(globalThis.crypto)}`;
+  }
+
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 const blankStyleMaterial = (): StyleMaterial => ({
-  id: crypto.randomUUID(),
+  id: createClientId("material"),
   title: "材料 1",
   content: "",
   sourceType: "text",
@@ -682,7 +691,7 @@ export function GouweiWorkbench() {
       );
       upsertMaterial({
         ...data.material,
-        id: crypto.randomUUID(),
+        id: createClientId("material"),
         title: data.material.title || normalizeStyleName(ref, "外部 Skill"),
       });
       setStyleMaterialMode("text");
@@ -756,7 +765,7 @@ export function GouweiWorkbench() {
       .join("\n\n");
 
     upsertMaterial({
-      id: crypto.randomUUID(),
+      id: createClientId("material"),
       title: `${styleSearchQuery.trim()}：高相关公开材料`,
       content: material,
       sourceType: "search",
@@ -981,7 +990,7 @@ export function GouweiWorkbench() {
           setLastClaudeRunConfig({ mode: generationMode, thinkingEnabled, length });
         }
         const streamingResult: ContinuationResult = {
-          id: crypto.randomUUID(),
+          id: createClientId("result"),
           createdAt: new Date().toISOString(),
           title: `${currentAnalysis.source.title}：${selectedArc}`,
           continuation: "",
