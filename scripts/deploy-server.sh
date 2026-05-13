@@ -22,6 +22,7 @@ PID_FILE="$RUN_DIR/$APP_NAME.pid"
 LOG_FILE="$RUN_DIR/$APP_NAME.log"
 ERR_FILE="$RUN_DIR/$APP_NAME.err.log"
 LOCK_DIR="$RUN_DIR/deploy.lock"
+NEXT_BIN="$APP_DIR/node_modules/next/dist/bin/next"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -49,6 +50,39 @@ current_pid_alive() {
   [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1
 }
 
+child_pids() {
+  local pid="$1"
+  pgrep -P "$pid" 2>/dev/null || true
+}
+
+terminate_process_tree() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return
+  current_pid_alive "$pid" || return
+
+  local children
+  children="$(child_pids "$pid")"
+  for child in $children; do
+    terminate_process_tree "$child"
+  done
+
+  kill "$pid" >/dev/null 2>&1 || true
+}
+
+force_kill_process_tree() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return
+  current_pid_alive "$pid" || return
+
+  local children
+  children="$(child_pids "$pid")"
+  for child in $children; do
+    force_kill_process_tree "$child"
+  done
+
+  kill -9 "$pid" >/dev/null 2>&1 || true
+}
+
 stop_existing_server() {
   if [[ ! -f "$PID_FILE" ]]; then
     return
@@ -62,7 +96,7 @@ stop_existing_server() {
   fi
 
   log "Stopping existing $APP_NAME process: $pid"
-  kill "$pid" >/dev/null 2>&1 || true
+  terminate_process_tree "$pid"
 
   for _ in {1..20}; do
     if ! current_pid_alive "$pid"; then
@@ -73,7 +107,7 @@ stop_existing_server() {
   done
 
   log "Existing process did not exit cleanly; forcing stop: $pid"
-  kill -9 "$pid" >/dev/null 2>&1 || true
+  force_kill_process_tree "$pid"
   rm -f "$PID_FILE"
 }
 
@@ -89,6 +123,8 @@ stop_port_listeners() {
     pids="$(lsof -ti TCP:"$APP_PORT" -sTCP:LISTEN 2>/dev/null || true)"
   elif command -v fuser >/dev/null 2>&1; then
     pids="$(fuser -n tcp "$APP_PORT" 2>/dev/null || true)"
+  elif command -v ss >/dev/null 2>&1; then
+    pids="$(ss -ltnp "sport = :$APP_PORT" 2>/dev/null | sed -nE 's/.*pid=([0-9]+).*/\1/p' | sort -u)"
   fi
 
   if [[ -z "$pids" ]]; then
@@ -107,7 +143,7 @@ stop_port_listeners() {
     fi
 
     log "Stopping process listening on port $APP_PORT: $pid"
-    kill "$pid" >/dev/null 2>&1 || true
+    terminate_process_tree "$pid"
   done
 
   for _ in {1..20}; do
@@ -128,7 +164,7 @@ stop_port_listeners() {
   for pid in $pids; do
     if current_pid_alive "$pid"; then
       log "Process still listening after graceful stop; forcing: $pid"
-      kill -9 "$pid" >/dev/null 2>&1 || true
+      force_kill_process_tree "$pid"
     fi
   done
 }
@@ -178,7 +214,7 @@ start_server() {
       PATH="$PATH" \
       HOSTNAME="$APP_HOST" \
       PORT="$APP_PORT" \
-      nohup npm run start -- --hostname "$APP_HOST" --port "$APP_PORT" \
+      nohup node "$NEXT_BIN" start --hostname "$APP_HOST" --port "$APP_PORT" \
         >>"$LOG_FILE" 2>>"$ERR_FILE" &
     echo $! >"$PID_FILE"
   )
