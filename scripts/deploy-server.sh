@@ -182,6 +182,19 @@ pull_latest_code() {
 
   log "Pulling latest code with fast-forward only"
   git pull --ff-only origin "$DEPLOY_BRANCH"
+  log "Current commit: $(git rev-parse --short HEAD) $(git log -1 --pretty=%s)"
+}
+
+verify_source_routes() {
+  local required_files=(
+    "src/app/api/me/route.ts"
+    "src/app/api/auth/zhihu/start/route.ts"
+    "src/app/api/auth/zhihu/callback/route.ts"
+  )
+
+  for file in "${required_files[@]}"; do
+    [[ -f "$file" ]] || fail "Required route source is missing after git pull: $file"
+  done
 }
 
 install_dependencies() {
@@ -196,7 +209,27 @@ install_dependencies() {
 
 build_app() {
   log "Building Next.js app into $NEXT_DIST_DIR"
+  if [[ "$NEXT_DIST_DIR" != ".next" ]]; then
+    rm -rf .next
+  fi
   NEXT_DIST_DIR="$NEXT_DIST_DIR" npm run build
+}
+
+verify_build_routes() {
+  local manifest="$NEXT_DIST_DIR/server/app-paths-manifest.json"
+  [[ -f "$manifest" ]] || fail "Build manifest is missing: $manifest"
+
+  local required_routes=(
+    '"/api/me/route"'
+    '"/api/auth/zhihu/start/route"'
+    '"/api/auth/zhihu/callback/route"'
+  )
+
+  for route in "${required_routes[@]}"; do
+    grep -Fq "$route" "$manifest" || fail "Built app is missing route in manifest: $route"
+  done
+
+  log "Verified build routes in $manifest"
 }
 
 start_server() {
@@ -260,10 +293,12 @@ main() {
 
   log "Deploying $APP_NAME from $APP_DIR"
   pull_latest_code
+  verify_source_routes
   install_dependencies
   stop_existing_server
   stop_port_listeners
   build_app
+  verify_build_routes
   start_server
   wait_until_ready
 }
