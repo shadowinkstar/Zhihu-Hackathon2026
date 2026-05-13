@@ -11,6 +11,7 @@ import {
 } from "@/lib/server/generation-common";
 import { generateSchema, generationModeFor } from "@/lib/server/generate-schema";
 import {
+  getClaudeCodeDiagnostics,
   getClaudeCodeDaemon,
   shouldTryClaudeCode,
 } from "@/lib/server/claude-code-daemon";
@@ -55,20 +56,25 @@ function splitStreamText(text: string) {
 }
 
 export async function GET() {
+  const diagnostics = getClaudeCodeDiagnostics();
   if (!shouldTryClaudeCode()) {
-    return NextResponse.json({ ok: false, reason: "Claude Code 未启用" }, { status: 503 });
+    return NextResponse.json({
+      ok: false,
+      reason: "Claude Code 未启用",
+      diagnostics,
+    });
   }
 
   try {
     await getClaudeCodeDaemon(true).warm();
-    return NextResponse.json({ ok: true, provider: "claude-code" });
+    return NextResponse.json({ ok: true, provider: "claude-code", diagnostics });
   } catch (error) {
     return NextResponse.json(
       {
         ok: false,
         error: safeError(error).message || "Claude Code 预热失败",
+        diagnostics,
       },
-      { status: 503 },
     );
   }
 }

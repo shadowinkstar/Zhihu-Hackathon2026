@@ -174,6 +174,8 @@ start_server() {
     env \
       NODE_ENV=production \
       NEXT_DIST_DIR="$NEXT_DIST_DIR" \
+      HOME="$HOME" \
+      PATH="$PATH" \
       HOSTNAME="$APP_HOST" \
       PORT="$APP_PORT" \
       nohup npm run start -- --hostname "$APP_HOST" --port "$APP_PORT" \

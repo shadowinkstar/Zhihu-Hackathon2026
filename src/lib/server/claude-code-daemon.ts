@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { TextDecoder } from "node:util";
 import type { GenerateRequest, GenerationMode } from "@/lib/types";
 import { buildClaudeMessages } from "@/lib/server/generation-prompts";
@@ -49,6 +49,33 @@ function isExpertMode(mode: GenerationMode) {
 
 function claudeExecutable() {
   return process.env.CLAUDE_CODE_PATH || "claude";
+}
+
+export function getClaudeCodeDiagnostics() {
+  const executable = claudeExecutable();
+  const result = spawnSync(executable, ["--version"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      FORCE_COLOR: "0",
+    },
+    windowsHide: true,
+  });
+
+  return {
+    executable,
+    ok: result.status === 0,
+    status: result.status,
+    error: result.error?.message,
+    stdout: result.stdout?.trim(),
+    stderr: result.stderr?.trim(),
+    env: {
+      home: process.env.HOME,
+      path: process.env.PATH,
+      claudeCodePath: process.env.CLAUDE_CODE_PATH,
+      claudeCodeEnabled: process.env.CLAUDE_CODE_ENABLED,
+    },
+  };
 }
 
 function shouldUseBareMode() {
