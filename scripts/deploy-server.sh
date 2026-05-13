@@ -169,6 +169,29 @@ stop_port_listeners() {
   done
 }
 
+stop_known_next_processes() {
+  local patterns=(
+    "$APP_DIR.*next.*start"
+    "$APP_DIR.*node_modules/next/dist/bin/next"
+    "next.*start.*--port $APP_PORT"
+    "next.*start.*-p $APP_PORT"
+  )
+
+  for pattern in "${patterns[@]}"; do
+    if command -v pgrep >/dev/null 2>&1; then
+      local pids
+      pids="$(pgrep -f "$pattern" 2>/dev/null || true)"
+      for pid in $pids; do
+        if [[ "$pid" == "$$" ]] || ! current_pid_alive "$pid"; then
+          continue
+        fi
+        log "Stopping matching Next.js process ($pattern): $pid"
+        terminate_process_tree "$pid"
+      done
+    fi
+  done
+}
+
 pull_latest_code() {
   log "Fetching latest git refs"
   git fetch origin "$DEPLOY_BRANCH"
@@ -282,6 +305,26 @@ wait_until_ready() {
   fail "Server did not become ready within ${STARTUP_TIMEOUT_SECONDS}s"
 }
 
+verify_runtime_routes() {
+  local base_url="http://127.0.0.1:$APP_PORT"
+  local checks=(
+    "/api/me"
+    "/api/auth/zhihu/start"
+  )
+
+  for path in "${checks[@]}"; do
+    local status
+    status="$(curl -sS -o /dev/null -w '%{http_code}' "$base_url$path" || true)"
+    if [[ "$status" != "200" ]]; then
+      tail -n 80 "$LOG_FILE" 2>/dev/null || true
+      tail -n 80 "$ERR_FILE" 2>/dev/null || true
+      fail "Runtime route check failed: $path returned HTTP $status"
+    fi
+  done
+
+  log "Verified runtime routes: ${checks[*]}"
+}
+
 main() {
   require_command git
   require_command node
@@ -296,11 +339,13 @@ main() {
   verify_source_routes
   install_dependencies
   stop_existing_server
+  stop_known_next_processes
   stop_port_listeners
   build_app
   verify_build_routes
   start_server
   wait_until_ready
+  verify_runtime_routes
 }
 
 main "$@"
