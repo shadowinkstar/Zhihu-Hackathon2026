@@ -25,19 +25,48 @@ function env(name: string, fallback = "") {
   return process.env[name]?.trim() || fallback;
 }
 
+function normalizeOrigin(value: string) {
+  return new URL(value).origin;
+}
+
+function isUnusablePublicHost(origin: string) {
+  const hostname = new URL(origin).hostname;
+  return hostname === "0.0.0.0" || hostname === "::" || hostname === "[::]";
+}
+
+function resolvePublicOrigin(requestOrigin: string) {
+  const explicitOrigin = env("ZHIHU_OAUTH_PUBLIC_ORIGIN", env("ZHIHU_OAUTH_POST_LOGIN_ORIGIN"));
+  if (explicitOrigin) {
+    return normalizeOrigin(explicitOrigin);
+  }
+
+  const explicitRedirectUri = env("ZHIHU_OAUTH_REDIRECT_URI");
+  if (explicitRedirectUri) {
+    return normalizeOrigin(explicitRedirectUri);
+  }
+
+  const origin = normalizeOrigin(requestOrigin);
+  if (isUnusablePublicHost(origin)) {
+    throw new Error("知乎 OAuth 不能使用 0.0.0.0 作为公网回调地址，请配置 ZHIHU_OAUTH_REDIRECT_URI 或 ZHIHU_OAUTH_POST_LOGIN_ORIGIN");
+  }
+  return origin;
+}
+
 export function zhihuOAuthConfig(origin: string) {
+  const publicOrigin = resolvePublicOrigin(origin);
   const appId = env("ZHIHU_OAUTH_APP_ID", env("ZHIHU_APP_ID", "312"));
   const appKey = env("ZHIHU_OAUTH_APP_KEY", env("ZHIHU_APP_KEY"));
   const redirectUri = env(
     "ZHIHU_OAUTH_REDIRECT_URI",
-    `${origin.replace(/\/$/, "")}/api/auth/zhihu/callback`,
+    `${publicOrigin}/api/auth/zhihu/callback`,
   );
 
   return {
     appId,
     appKey,
+    publicOrigin,
     redirectUri,
-    postLoginOrigin: env("ZHIHU_OAUTH_POST_LOGIN_ORIGIN"),
+    postLoginOrigin: normalizeOrigin(env("ZHIHU_OAUTH_POST_LOGIN_ORIGIN", publicOrigin)),
     scope: env("ZHIHU_OAUTH_SCOPE"),
     authorizeUrl: env("ZHIHU_OAUTH_AUTHORIZE_URL", "https://openapi.zhihu.com/authorize"),
     tokenUrl: env("ZHIHU_OAUTH_TOKEN_URL", "https://openapi.zhihu.com/access_token"),

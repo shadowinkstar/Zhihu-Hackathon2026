@@ -11,7 +11,8 @@ import {
 export const runtime = "nodejs";
 
 function callbackError(request: NextRequest, message: string) {
-  const url = new URL("/", request.nextUrl.origin);
+  const config = zhihuOAuthConfig(request.nextUrl.origin);
+  const url = new URL("/", config.postLoginOrigin);
   url.searchParams.set("auth_error", message);
   const response = NextResponse.redirect(url);
   response.cookies.delete(oauthStateCookieName);
@@ -37,13 +38,13 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const token = await exchangeZhihuCode(request.nextUrl.origin, authorizationCode);
-    const profile = await fetchZhihuUser(request.nextUrl.origin, token);
+    const config = zhihuOAuthConfig(request.nextUrl.origin);
+    const token = await exchangeZhihuCode(config.publicOrigin, authorizationCode);
+    const profile = await fetchZhihuUser(config.publicOrigin, token);
     const user = await upsertZhihuUser(profile);
     const session = await createUserSession(user.id, sessionMaxAgeSeconds);
-    const config = zhihuOAuthConfig(request.nextUrl.origin);
     const postLoginOrigin =
-      (await consumeOAuthReturnOrigin()) || config.postLoginOrigin || request.nextUrl.origin;
+      (await consumeOAuthReturnOrigin()) || config.postLoginOrigin;
     const redirectUrl = new URL("/", postLoginOrigin);
     const response = NextResponse.redirect(redirectUrl);
     response.cookies.delete(oauthStateCookieName);

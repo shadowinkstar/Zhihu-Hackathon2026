@@ -268,7 +268,6 @@ start_server() {
       NEXT_DIST_DIR="$NEXT_DIST_DIR" \
       HOME="$HOME" \
       PATH="$PATH" \
-      HOSTNAME="$APP_HOST" \
       PORT="$APP_PORT" \
       nohup node "$NEXT_BIN" start --hostname "$APP_HOST" --port "$APP_PORT" \
         >>"$LOG_FILE" 2>>"$ERR_FILE" &
