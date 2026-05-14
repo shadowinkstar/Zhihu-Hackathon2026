@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
     const response = NextResponse.redirect(redirectUrl);
     response.cookies.delete(oauthStateCookieName);
     if (postLoginOrigin === request.nextUrl.origin) {
-      setSessionCookie(response, session.id);
+      setSessionCookie(response, session.id, request);
     } else {
       const ticket = await createLoginTicket(session.id);
       redirectUrl.searchParams.set("login_ticket", ticket.id);

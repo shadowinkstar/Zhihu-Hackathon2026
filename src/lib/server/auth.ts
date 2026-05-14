@@ -63,11 +63,24 @@ export async function clearSession(request: NextRequest, response: NextResponse)
   response.cookies.delete(sessionCookieName);
 }
 
-export function setSessionCookie(response: NextResponse, sessionId: string) {
+function isHttpsRequest(request?: NextRequest) {
+  if (!request) {
+    return false;
+  }
+
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  if (forwardedProto) {
+    return forwardedProto === "https";
+  }
+
+  return request.nextUrl.protocol === "https:";
+}
+
+export function setSessionCookie(response: NextResponse, sessionId: string, request?: NextRequest) {
   response.cookies.set(sessionCookieName, createSignedValue(sessionId), {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isHttpsRequest(request),
     path: "/",
     maxAge: sessionMaxAgeSeconds,
   });
