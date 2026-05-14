@@ -14,6 +14,8 @@ APP_HOST="${APP_HOST:-0.0.0.0}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-master}"
 NEXT_DIST_DIR="${NEXT_DIST_DIR:-.next-build}"
 STARTUP_TIMEOUT_SECONDS="${STARTUP_TIMEOUT_SECONDS:-30}"
+PREWARM_CLAUDE="${PREWARM_CLAUDE:-1}"
+PREWARM_TIMEOUT_SECONDS="${PREWARM_TIMEOUT_SECONDS:-150}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -324,6 +326,27 @@ verify_runtime_routes() {
   log "Verified runtime routes: ${checks[*]}"
 }
 
+prewarm_claude_code() {
+  if [[ "$PREWARM_CLAUDE" != "1" ]]; then
+    log "Skipping Claude Code prewarm: PREWARM_CLAUDE=$PREWARM_CLAUDE"
+    return
+  fi
+
+  local url="http://127.0.0.1:$APP_PORT/api/generate/stream?warm=1&wait=1"
+  local output
+  log "Prewarming Claude Code daemon: $url"
+  if ! output="$(curl -fsS --max-time "$PREWARM_TIMEOUT_SECONDS" "$url" 2>&1)"; then
+    tail -n 80 "$LOG_FILE" 2>/dev/null || true
+    tail -n 80 "$ERR_FILE" 2>/dev/null || true
+    fail "Claude Code prewarm failed: $output"
+  fi
+  if [[ "$output" != *'"ok":true'* ]]; then
+    fail "Claude Code prewarm returned non-ready response: $output"
+  fi
+
+  log "Claude Code prewarm complete: $output"
+}
+
 main() {
   require_command git
   require_command node
@@ -345,6 +368,7 @@ main() {
   start_server
   wait_until_ready
   verify_runtime_routes
+  prewarm_claude_code
 }
 
 main "$@"

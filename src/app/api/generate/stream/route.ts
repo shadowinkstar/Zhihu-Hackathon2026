@@ -56,8 +56,9 @@ function splitStreamText(text: string) {
   return chunks;
 }
 
-export async function GET() {
-  const diagnostics = getClaudeCodeDiagnostics();
+export async function GET(request: NextRequest) {
+  const shouldWarm = request.nextUrl.searchParams.get("warm") === "1";
+  const diagnostics = shouldWarm ? getClaudeCodeDiagnostics() : undefined;
   if (!shouldTryClaudeCode()) {
     return NextResponse.json({
       ok: false,
@@ -66,18 +67,41 @@ export async function GET() {
     });
   }
 
-  try {
-    await getClaudeCodeDaemon(true).warm();
-    return NextResponse.json({ ok: true, provider: "claude-code", diagnostics });
-  } catch (error) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: safeError(error).message || "Claude Code 预热失败",
-        diagnostics,
-      },
-    );
+  const daemon = getClaudeCodeDaemon(true);
+  const shouldWait = request.nextUrl.searchParams.get("wait") === "1";
+  let warmup: "skipped" | "started" | "completed" | "ready" = "skipped";
+  if (shouldWarm) {
+    if (daemon.isReady()) {
+      warmup = "ready";
+    } else if (shouldWait) {
+      await daemon.warm();
+      warmup = "completed";
+    } else if (!daemon.isBusy()) {
+      warmup = "started";
+      void daemon.warm().catch((error) => {
+        void logCallEvent({
+          callId: newCallId("generate_stream_warmup"),
+          event: "generate_stream.warmup_failed",
+          route: "/api/generate/stream",
+          ok: false,
+          startedAt: new Date().toISOString(),
+          endedAt: new Date().toISOString(),
+          durationMs: 0,
+          promptVersion: PROMPT_VERSION,
+          error: safeError(error),
+        });
+      });
+    }
   }
+
+  return NextResponse.json({
+    ok: true,
+    provider: "claude-code",
+    ready: daemon.isReady(),
+    busy: daemon.isBusy(),
+    warmup,
+    diagnostics,
+  });
 }
 
 export async function POST(request: NextRequest) {

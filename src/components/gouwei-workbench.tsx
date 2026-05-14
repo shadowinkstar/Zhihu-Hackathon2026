@@ -589,22 +589,6 @@ export function GouweiWorkbench() {
   }, [busy, generationStartedAt]);
 
   useEffect(() => {
-    if (!currentUser) {
-      return;
-    }
-
-    const controller = new AbortController();
-    fetch("/api/generate/stream", {
-      method: "GET",
-      signal: controller.signal,
-    }).catch(() => {
-      // Warmup is best-effort; generation still starts the daemon lazily.
-    });
-
-    return () => controller.abort();
-  }, [currentUser]);
-
-  useEffect(() => {
     if (styleMaterialMode !== "skill" || skillCandidates.length) {
       return;
     }
