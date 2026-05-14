@@ -17,7 +17,6 @@ import {
   Plus,
   RefreshCw,
   Search,
-  ShieldCheck,
   Sparkles,
   Square,
   Trash2,
@@ -58,13 +57,13 @@ const neutralStyle: StyleProfile = {
 const presetStyles: StyleProfile[] = [
   {
     id: "kimura-police-cut",
-    label: "木村上村树",
+    label: "木寸上春树",
     source: "preset",
     summary: "日常独白、轻微跑题，最后把线索拐进王警官的扫黄现场。",
     provenance: "系统预设：日常独白、荒诞转场、突兀收束。",
     dimensions: ["日常物件开场", "低烈度独白", "跑题式转场", "扫黄式荒诞收束"],
     prompt:
-      "使用虚构的木村上村树式协作风格：平静日常、细节独白、突然离题、荒诞收束；可以把结尾转向王警官扫黄桥段，但不要模仿现实作者的受保护表达。",
+      "使用虚构的木寸上春树式协作风格：平静日常、细节独白、突然离题、荒诞收束；可以把结尾转向王警官扫黄桥段，但不要模仿现实作者的受保护表达。",
   },
   {
     id: "yanxuan-suspense",
@@ -109,7 +108,7 @@ const presetStyles: StyleProfile[] = [
 ];
 
 const arcs = [
-  { id: "付费断口安全续写", label: "断口续写" },
+  { id: "续写", label: "续写" },
   { id: "盐选题材互转", label: "题材互转" },
 ];
 
@@ -462,7 +461,7 @@ export function GouweiWorkbench() {
   const [selectedStyleId, setSelectedStyleId] = useState(neutralStyle.id);
   const [selectedArc, setSelectedArc] = useState(arcs[0].id);
   const [generationMode, setGenerationMode] = useState<GenerationMode>("quick");
-  const [thinkingEnabled, setThinkingEnabled] = useState(true);
+  const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const [length, setLength] = useState<"short" | "medium" | "long">("medium");
   const [currentUser, setCurrentUser] = useState<ZhihuUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -1325,7 +1324,7 @@ export function GouweiWorkbench() {
       </header>
 
       <div className="mx-auto max-w-[1440px] px-4 py-4">
-        <div className="mb-4 flex flex-col gap-3 border-b border-[#dfd3c2] pb-3 md:flex-row md:items-center md:justify-between">
+        <div className="mb-4 border-b border-[#dfd3c2] pb-3">
           <div className="grid w-full grid-cols-2 rounded-lg bg-[#e8ddcb] p-1 md:w-80">
             {([
               ["write", "续写"],
@@ -1344,9 +1343,6 @@ export function GouweiWorkbench() {
               </button>
             ))}
           </div>
-          <p className="text-xs leading-5 text-[#6f6558]">
-            知乎故事、粘贴文本和文风 Skill 进入同一套续写流程。
-          </p>
         </div>
 
         {activeTab === "write" ? (
@@ -1420,7 +1416,7 @@ export function GouweiWorkbench() {
                 value={sourceText}
                 onChange={(event) => setSourceText(event.target.value)}
                 className="mt-4 min-h-[430px] flex-1 resize-none rounded-lg border border-[#d8cdbc] bg-white px-4 py-4 text-[15px] leading-8 outline-none transition focus:border-[#176bff] focus:ring-2 focus:ring-[#176bff]/15"
-                placeholder="直接粘贴知乎试读片段、自有草稿，或从上方故事列表选择正文。"
+                placeholder="直接粘贴要续写的片段，或从上方列表选择正文。"
               />
 
               <section className="mt-3 rounded-lg border border-[#171411] bg-white p-3">
@@ -1692,10 +1688,6 @@ export function GouweiWorkbench() {
                 )}
               </AnimatePresence>
 
-              <p className="mt-3 flex gap-2 text-xs leading-5 text-[#c9bca8]">
-                <ShieldCheck aria-hidden="true" className="mt-0.5 shrink-0 text-[#9ad7b2]" />
-                输出默认保留原创续写边界，不复现隐藏正文。
-              </p>
               {generationRecords.length ? (
                 <details className="mt-3 rounded-lg border border-white/12 bg-[#201b16] p-3">
                   <summary className="cursor-pointer list-none text-xs font-semibold text-[#89b5ff]">
@@ -2106,17 +2098,8 @@ export function GouweiWorkbench() {
                   <p className="text-sm font-semibold text-[#89b5ff]">已有文风</p>
                   <h2 className="mt-2 truncate text-xl font-semibold">{selectedStyle.label}</h2>
                 </div>
-                <span className="rounded bg-white/10 px-2 py-1 text-[11px] font-semibold text-[#c9bca8]">
-                  至少保留 {minimumStyleCount}
-                </span>
               </div>
               <p className="mt-3 text-sm leading-6 text-[#d8cdbc]">{selectedStyle.summary}</p>
-
-              {selectedStyle.provenance ? (
-                <p className="mt-3 rounded-md border border-white/10 bg-white/[0.04] p-3 text-xs leading-5 text-[#c9bca8]">
-                  {selectedStyle.provenance}
-                </p>
-              ) : null}
 
               {selectedStyle.dimensions?.length ? (
                 <div className="mt-4 flex flex-wrap gap-2">

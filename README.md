@@ -1,15 +1,52 @@
 # 狗尾续貂？
 
-知乎 Hackathon 2026「AI 脑洞实验室」创作赛道 Demo。项目定位是一个面向知乎长文、盐选题材和用户自有草稿的 AI 续写工作台：识别文章断口，炼化可审计的文风 Skill，再生成带版权声明的原创续写草稿。
+一个专门给知乎故事“续命”的 AI 创作工作台。
+
+我想做的不是通用写作助手，而是一个更贴近知乎故事创作场景的工具：用户选择一段自己感兴趣的内容，或者粘贴一段自己已经能看到的文本，系统先炼化文风、梳理断口和剧情钩子，再生成一版可继续编辑的续写草稿。
+
+- 在线演示：http://43.167.247.155:3000/
+- 项目想法：[任瑄的想法 - 知乎](https://www.zhihu.com/pin/2038196230724007681)
+- 参赛方向：知乎 Hackathon 2026「AI 脑洞实验室」
+
+## 为什么做
+
+知乎故事最有意思的地方，往往不是“让 AI 直接写一篇小说”，而是断在一个很会吊人的地方：人物关系刚刚立住，矛盾刚刚展开，读者已经开始脑补后续。
+
+“狗尾续貂？”围绕这个瞬间做了三件事：
+
+- 读懂材料：识别当前片段里的角色、冲突、断口和可续写方向。
+- 炼化文风：从粘贴文本、公开材料或 Skill 链接中生成可复用的文风 Skill。
+- 接着写下去：用当前文风和剧情方向生成续写，并保留工作记录、推理流和历史草稿。
+
+## 当前能力
+
+- **知乎登录**：登录后使用内置 Kimi 兼容模型配置。
+- **故事选择**：接入 Hackathon 官方故事接口，可以从故事列表选择正文进入工作台。
+- **文本续写**：支持用户粘贴已可见文本，选择文风、篇幅和生成模式后流式生成。
+- **文风炼化**：支持粘贴多段材料，也支持从 ClawHub / GitHub Skill 导入材料，再生成自己的文风 Skill。
+- **两档生成**：快速模式直接出稿；专家模式会按大纲、草稿、编辑校对流程推进。
+- **过程可见**：页面展示阶段日志、实时正文、可选模型思考和历史记录。
+- **部署预热**：部署脚本会在服务启动后预热 Claude Code daemon，避免首位用户承担冷启动。
+
+## 产品流程
+
+```mermaid
+flowchart LR
+  A["选择故事或粘贴片段"] --> B["分析断口与剧情钩子"]
+  B --> C["选择或炼化文风 Skill"]
+  C --> D["配置篇幅与模式"]
+  D --> E["Claude Code 流式生成"]
+  E --> F["继续生成或回看历史"]
+```
 
 ## 技术栈
 
 - Next.js App Router + TypeScript
 - Tailwind CSS v4
 - Route Handlers 作为后端 API
-- `framer-motion` 做轻量交互动效
-- `lucide-react` 做操作图标
-- 本地 JSON 邀请码限额存储，后续可替换为 Postgres/Redis
+- Claude Code 常驻进程 + `stream-json` 事件流
+- 本地 JSON 存储用户、会话、文风和生成记录
+- `framer-motion` + `lucide-react` 做轻量交互
 
 ## 本地运行
 
@@ -24,143 +61,99 @@ npm run dev
 http://127.0.0.1:3000
 ```
 
-## 核心功能
+需要在 `.env.local` 中配置知乎 OAuth 和模型相关环境变量。当前项目使用 repo-local Claude Code / Kimi 兼容配置，避免修改全局模型配置。
 
-- 文章输入：支持知乎故事接口、知乎链接、用户粘贴片段和自有草稿。
-- 风格炼化：生成 `dogtail-style.skill` 摘要，包含节奏、词汇、桥段和禁区。
-- 续写生成：邀请码模式通过 Claude Code 常驻进程流式生成，也支持用户登记 OpenAI-compatible API。
-- 生成模式：快速、专家两档；可按需开启模型思考。
-- 版权护栏：默认禁止绕过付费墙、复现隐藏正文、冒充原作者。
-- 主页声明：生成用户主页预览、AI 辅助声明、原文跳转和下架入口。
+## 关键接口
 
-## API
+### `GET /api/me`
 
-### `POST /api/analyze`
+读取当前登录用户、用户文风和历史生成记录。未登录时返回空用户，方便前端安静探测登录状态。
 
-抽取公开元信息、用户片段和风格 Skill。
+### `GET /api/stories`
 
-```json
-{
-  "sourceUrl": "https://www.zhihu.com/question/...",
-  "sourceText": "用户有权提供的片段",
-  "permission": "public"
-}
-```
+读取 Hackathon 官方故事列表。
 
-### `POST /api/generate`
+### `GET /api/stories/[workId]`
 
-基于分析结果生成续写。邀请码模式会扣减本地额度。
+读取单个故事详情，并放入续写工作台。
+
+### `POST /api/style-refine`
+
+基于用户提供的材料生成文风 Skill，返回 Server-Sent Events。
+
+### `POST /api/generate/stream`
+
+登录后的内置模型流式续写接口。请求示例：
 
 ```json
 {
   "analysis": {},
-  "sourceText": "用户有权提供的片段",
-  "selectedArc": "付费断口安全续写",
+  "sourceText": "用户已经能看到并选择提供的片段",
+  "selectedArc": "续写",
   "generationMode": "quick",
+  "thinkingEnabled": false,
   "length": "medium",
-  "styleIntensity": 56,
+  "styleIntensity": 64,
   "access": {
-    "mode": "invite",
-    "inviteCode": "ZH-HACK-2026"
+    "mode": "internal"
   }
 }
 ```
 
-`generationMode` 可选值：
-
-- `quick`：快速模式，直接出稿。
-- `expert`：专家模式，单上下文深度推演后出稿。
-
-### `POST /api/generate/stream`
-
-邀请码模式的流式生成接口。请求体与 `/api/generate` 相同，但只接受 `access.mode = "invite"`；响应体是 Server-Sent Events，配套元信息放在响应头：
+响应是 Server-Sent Events：
 
 ```text
-x-generation-mode: quick | expert
-x-provider: claude-code | demo-invite
-x-quota-remaining: 19
+event: log
+data: {"type":"log","title":"等待模型返回","status":"running"}
+
+event: text
+data: {"type":"text","chunk":"..."}
 ```
 
-### `POST /api/invite/redeem`
+### `GET /api/generate/stream?warm=1&wait=1`
 
-检查或扣减邀请码额度。
+部署阶段使用的 Claude Code daemon 预热接口。普通页面不会自动调用它。
 
-```json
-{
-  "code": "ZH-HACK-2026",
-  "previewOnly": true
-}
+## 部署
+
+服务器上直接运行：
+
+```bash
+APP_PORT=3000 DEPLOY_BRANCH=master bash scripts/deploy-server.sh
+```
+
+部署脚本会完成：
+
+- 拉取最新代码
+- 安装依赖
+- 构建 `.next-build`
+- 停止旧进程
+- 启动固定端口服务
+- 校验 `/api/me` 和 `/api/auth/zhihu/start`
+- 预热 Claude Code daemon
+
+如果临时不想在部署阶段等待预热：
+
+```bash
+PREWARM_CLAUDE=0 bash scripts/deploy-server.sh
 ```
 
 ## 调用日志
 
-每次分析、炼化和生成都会写入结构化 JSONL：
+分析、炼化和生成会写入结构化 JSONL：
 
 ```text
 data/call-logs/YYYY-MM-DD.jsonl
 ```
 
-日志会记录：
+日志记录模型供应商、耗时、prompt 版本、请求摘要、输出摘要和失败原因；不会记录 API Key。
 
-- `promptVersion`
-- 请求摘要和文本哈希
-- system prompt、用户 prompt 模板、正文片段哈希和短预览
-- 模型供应商、模型名、耗时
-- 模型 token usage、停止原因、返回 content block 类型
-- 输出全文和输出摘要
-- 失败原因和回退路径
-
-不会记录 API Key；用户粘贴的盐选/付费正文不会以全文写入日志。查看最新日志摘要：
+查看最新日志摘要：
 
 ```bash
 npm run logs:latest
 ```
 
-## 内置模型配置
+## 边界
 
-邀请码模式会按顺序尝试：
-
-1. Claude Code 常驻进程
-2. Anthropic/Claude-compatible 环境变量
-3. OpenAI-compatible 内置接口
-4. 本地 mock 文本
-
-流式接口默认使用项目本地 Claude Code 配置，不需要改全局模型配置：
-
-```bash
-CLAUDE_CODE_ENABLED=1
-CLAUDE_CODE_PATH=claude
-CLAUDE_CODE_TIMEOUT_MS=180000
-```
-
-```bash
-ANTHROPIC_BASE_URL=https://api.anthropic.com
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_MODEL=claude-sonnet-4-5
-```
-
-或配置 OpenAI-compatible 接口：
-
-```bash
-INTERNAL_MODEL_ENDPOINT=https://api.example.com/v1
-INTERNAL_MODEL_API_KEY=sk-...
-INTERNAL_MODEL_NAME=your-model-name
-```
-
-本机已有 Claude Code 相关环境时，也会识别 `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_DEFAULT_SONNET_MODEL` 和 `ANTHROPIC_DEFAULT_HAIKU_MODEL`。未配置真实模型时，邀请码模式会返回稳定的本地 mock 续写，便于现场演示。
-
-## 邀请码
-
-默认邀请码在 `src/lib/server/invite-store.ts` 中配置：
-
-- `ZH-HACK-2026`：20 次
-- `DOGTAIL-DEMO`：8 次
-
-运行时会自动生成 `data/invites.json` 保存使用量。该文件已加入 `.gitignore`。
-
-## 后续扩展
-
-- 接入知乎官方开放 API，替换当前公开标题抓取和文本粘贴流程。
-- 将 Skill 导出为标准 `SKILL.md` 文件夹，沉淀作者/题材协作模板。
-- 自动生成 LoRA/SFT 数据集，只使用用户明确提供的语料。
-- 增加账号系统和作品广场，用于人气奖曝光与项目广场占位。
+这个项目只处理用户已经能合法看到、选择或粘贴提供的内容。它不会绕过登录、付费墙或平台限制，也不会把“模仿真实作者”作为产品目标。文风炼化服务于续写协作，最终输出仍然需要用户编辑、判断和发布。

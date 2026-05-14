@@ -67,7 +67,8 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const daemon = getClaudeCodeDaemon(true);
+  const warmThinkingEnabled = request.nextUrl.searchParams.get("thinking") === "1";
+  const daemon = getClaudeCodeDaemon(warmThinkingEnabled);
   const shouldWait = request.nextUrl.searchParams.get("wait") === "1";
   let warmup: "skipped" | "started" | "completed" | "ready" = "skipped";
   if (shouldWarm) {
